@@ -9,13 +9,16 @@ const app = express();
 // 1. Webプロキシ (Ultraviolet等) の処理
 // ==========================================
 const PROXY_DIR = path.join(__dirname, 'proxy'); 
-const PROXY_ENDPOINTS = ['prxy', 'baremux', 'epoxy', 'libcurl', 'register-sw.mjs', 'uv'];
+const PROXY_ENDPOINTS = [
+  'prxy', 'baremux', 'epoxy', 'libcurl', 'register-sw.mjs', 'uv'
+];
 
 app.get('/proxy', (req, res) => res.redirect('/proxy/'));
 app.use('/proxy', express.static(PROXY_DIR));
 
 app.use((req, res, next) => {
     if (res.headersSent) return next();
+    
     const fileName = req.path.replace(/^\//, '');
     if (PROXY_ENDPOINTS.includes(fileName)) {
         const targetPath = path.join(PROXY_DIR, fileName);
@@ -26,6 +29,9 @@ app.use((req, res, next) => {
     next();
 });
 
+// ==========================================
+// 2. 漫画プロキシからの保護（干渉防止壁）
+// ==========================================
 const UV_DYNAMIC_PATHS = [
     '/proxy', '/prxy', '/baremux', '/epoxy', '/libcurl', 
     '/register-sw.mjs', '/uv', '/~uv', '/bare', 
@@ -41,28 +47,52 @@ app.use((req, res, next) => {
 });
 
 // ==========================================
-// 2. 【核心】負荷ゼロ・リダイレクト画像プロキシ
+// 3. 【新設】外部CDNを使った超圧縮・画像プロキシ
 // ==========================================
-app.get('/_img_/', (req, res) => {
+const proxyAgent = new https.Agent({ keepAlive: true, maxSockets: 512, timeout: 60000 });
+
+app.get('/_img_/', async (req, res) => {
     const imgUrl = req.query.url;
     if (!imgUrl) return res.status(400).end();
 
-    // 🌟 Renderは画像をダウンロードしません！
-    // MDMで絶対に弾かれない「Googleの公式画像プロキシサーバー」のURLを生成し、
-    // ブラウザに「そっちから直接ダウンロードして」と案内（リダイレクト）します。
-    // Renderが送るのはテキスト1行だけなので、通信量もCPU負荷も「ゼロ」です。
-    const googleProxyUrl = `https://images1-focus-opensocial.googleusercontent.com/gadgets/proxy?container=focus&refresh=2592000&url=${encodeURIComponent(imgUrl)}`;
+    // 🌟 wsrv.nl を使って横幅720px、WebP、画質40%に超圧縮（通信量を1/10に！）
+    const cdnUrl = `https://wsrv.nl/?url=${encodeURIComponent(imgUrl)}&w=720&output=webp&q=40`;
 
-    res.set('Cache-Control', 'public, max-age=31536000, immutable');
-    res.redirect(301, googleProxyUrl);
+    try {
+        const imgRes = await fetch(cdnUrl, {
+            headers: { 'User-Agent': req.get('user-agent') || 'Mozilla/5.0' },
+            agent: proxyAgent
+        });
+
+        res.set('Access-Control-Allow-Origin', '*');
+        res.set('Cache-Control', 'public, max-age=31536000, immutable');
+
+        // 万が一 wsrv.nl が画像を弾いた場合（リファラ制限など）のフェイルセーフ（保険）
+        if (!imgRes.ok) {
+            console.log(`[CDN Miss] Fallback to direct fetch: ${imgUrl}`);
+            const fallbackRes = await fetch(imgUrl, {
+                headers: { 'Referer': 'https://mangarw.com/', 'User-Agent': 'Mozilla/5.0' },
+                agent: proxyAgent
+            });
+            res.set('Content-Type', fallbackRes.headers.get('content-type'));
+            return fallbackRes.body.pipe(res);
+        }
+
+        res.set('Content-Type', 'image/webp'); 
+        imgRes.body.pipe(res);
+        imgRes.body.on('error', () => {
+            if (!res.headersSent) res.end();
+        });
+    } catch (e) {
+        if (!res.headersSent) res.status(502).end();
+    }
 });
 
 // ==========================================
-// 3. 漫画プロキシ (MangaRaw 本体処理)
+// 4. 漫画プロキシ (MangaRaw 本体処理)
 // ==========================================
 const TARGET_HOST = "mangarw.com";
 const TARGET_BASE = `https://${TARGET_HOST}`;
-const proxyAgent = new https.Agent({ keepAlive: true, maxSockets: 512, timeout: 60000 });
 
 app.use(express.raw({ type: '*/*', limit: '50mb' }));
 
@@ -77,14 +107,12 @@ const INJECT_CODE = `
   (function() {
     window.open = () => null;
 
-    // 画像のURLを「Renderの画像案内所（/_img_/）」に向ける
+    // 画像のURLを「超圧縮プロキシ」経由に書き換える
     const processImages = () => {
       document.querySelectorAll('img').forEach(img => {
         const src = img.dataset.src || img.getAttribute('src');
         if (src && !src.startsWith('data:') && !src.includes('/_img_/?url=')) {
           const absUrl = src.startsWith('http') ? src : window.location.origin + (src.startsWith('/') ? src : '/' + src);
-          
-          // HTML上では完全にあなたのRenderドメインのパスになります
           const proxyUrl = '/_img_/?url=' + encodeURIComponent(absUrl);
           
           img.setAttribute('src', proxyUrl);
@@ -218,4 +246,4 @@ app.all('*', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Super Fast Redirect Engine Online on port ${PORT}`));
+app.listen(PORT, () => console.log(`Super Compressed Manga Engine Online on port ${PORT}`));
