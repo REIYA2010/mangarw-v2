@@ -194,7 +194,7 @@ app.all('*', async (req, res) => {
     h['Origin'] = TARGET_BASE;
     h['Referer'] = TARGET_BASE + '/';
     
-    // ⭐ Accept-Encoding を完全に削除（圧縮を要求しない）
+    // ⭐ Accept-Encoding を完全に削除
     delete h['Accept-Encoding'];
 
     try {
@@ -252,15 +252,22 @@ app.all('*', async (req, res) => {
         }
 
         // ==========================================
-        // ⭐ HTML処理
+        // ⭐ HTML処理（zstd 対応版）
         // ==========================================
         if (contentType.includes("text/html")) {
             const buffer = await response.buffer();
             console.log(`[HTML] Content-Encoding: ${contentEncoding}, Buffer size: ${buffer.length}`);
             
-            const decompressed = decompressBuffer(buffer, contentEncoding);
+            // ⭐ zstd の場合は、解凍せずにブラウザに任せる
+            if (contentEncoding.includes('zstd')) {
+                console.log(`[HTML] zstd detected, passing through to browser`);
+                res.set(resHeaders);
+                res.set("Content-Type", "text/html; charset=utf-8");
+                // Content-Encoding は維持（ブラウザが解凍）
+                return res.status(response.status).send(buffer);
+            }
             
-            // ⭐ 文字列に変換（UTF-8）
+            const decompressed = decompressBuffer(buffer, contentEncoding);
             let text = decompressed.toString('utf-8');
             
             console.log(`[HTML] Decompressed size: ${text.length}`);
