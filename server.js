@@ -150,18 +150,15 @@ const TARGET_BASE = `https://${TARGET_HOST}`;
 app.use(express.raw({ type: '*/*', limit: '50mb' }));
 
 // ==========================================
-// ⭐ 画像URL書き換え関数（サーバー側で強制）
+// ⭐ 画像URLを強制的に書き換える関数
 // ==========================================
 function rewriteImageUrls(html) {
-    // すべての画像URLをプロキシ経由に書き換え
     var result = html.replace(
         /(src|data-src)\s*=\s*["']([^"']+)["']/gi,
         function(match, attr, url) {
-            // data:image はスキップ
             if (url.indexOf('data:') === 0) return match;
-            // すでにプロキシ経由ならスキップ
             if (url.indexOf('/_img_/') !== -1) return match;
-            // 絶対URLに変換
+            
             var absUrl = url;
             if (absUrl.indexOf('//') === 0) {
                 absUrl = 'https:' + absUrl;
@@ -170,6 +167,7 @@ function rewriteImageUrls(html) {
             } else if (absUrl.indexOf('http://') !== 0 && absUrl.indexOf('https://') !== 0) {
                 absUrl = 'https://mangarw.com/' + absUrl;
             }
+            
             var proxyUrl = '/_img_/?url=' + encodeURIComponent(absUrl);
             return attr + '="' + proxyUrl + '"';
         }
@@ -178,29 +176,16 @@ function rewriteImageUrls(html) {
 }
 
 // ==========================================
-// ⭐ zstd 解凍関数（強制）
+// ⭐ zstd を解凍するための代替手段
 // ==========================================
-function decompressZstd(buffer) {
-    try {
-        // zstd を解凍するために外部ライブラリが必要
-        // ここでは解凍せずに、ブラウザに任せる（PC/Edgeはzstdをサポート）
-        console.log(`[zstd] Passing through to browser (Edge/Chrome will decompress)`);
-        return buffer;
-    } catch (e) {
-        console.log(`[zstd] Decompression failed: ${e.message}`);
-        return buffer;
-    }
-}
-
-// ==========================================
-// ⭐ 圧縮展開関数
-// ==========================================
+// zstd は Node.js 標準では解凍できないため、
+// 圧縮ヘッダーを削除して生データとして扱う
 function decompressBuffer(buffer, encoding) {
     if (!encoding || encoding === 'identity') return buffer;
     
     if (encoding.includes('zstd')) {
-        console.log(`[Decompress] zstd detected`);
-        return decompressZstd(buffer);
+        console.log(`[Decompress] zstd detected, passing through to browser`);
+        return buffer;
     }
     
     try {
@@ -218,7 +203,7 @@ function decompressBuffer(buffer, encoding) {
 }
 
 // ==========================================
-// ⭐ INJECT_CODE（最小限 + フォールバック）
+// ⭐ INJECT_CODE（クライアント側フォールバック）
 // ==========================================
 const INJECT_CODE = `
 <style>
@@ -229,7 +214,7 @@ const INJECT_CODE = `
 </style>
 
 <script>
-  // フォールバック: クライアント側で画像変換
+  // ⭐ クライアント側で画像を変換（iPad用フォールバック）
   (function() {
     function fixImages() {
       var images = document.querySelectorAll('img');
@@ -249,7 +234,6 @@ const INJECT_CODE = `
     setTimeout(fixImages, 1000);
     document.addEventListener('DOMContentLoaded', fixImages);
     window.addEventListener('load', fixImages);
-    setInterval(fixImages, 2000);
   })();
 </script>
 `;
@@ -354,7 +338,7 @@ app.all('*', async (req, res) => {
         }
 
         // ==========================================
-        // HTML処理（zstd対応 + 画像書き換え）
+        // HTML処理
         // ==========================================
         if (contentType.includes("text/html")) {
             const buffer = await response.buffer();
@@ -362,6 +346,19 @@ app.all('*', async (req, res) => {
             
             let text;
             if (contentEncoding && contentEncoding !== 'identity') {
+                // zstd はそのままブラウザに任せる
+                if (contentEncoding.includes('zstd')) {
+                    console.log(`[HTML] zstd detected, passing through to browser`);
+                    // 画像URLを書き換えてから送信
+                    let html = buffer.toString('utf-8');
+                    html = rewriteImageUrls(html);
+                    html = html.replace('<head>', '<head>' + INJECT_CODE);
+                    res.set(resHeaders);
+                    res.set("Content-Type", "text/html; charset=utf-8");
+                    res.set("Content-Encoding", "identity");
+                    res.removeHeader('content-length');
+                    return res.status(response.status).send(html);
+                }
                 const decompressed = decompressBuffer(buffer, contentEncoding);
                 text = decompressed.toString('utf-8');
             } else {
@@ -385,7 +382,7 @@ app.all('*', async (req, res) => {
             text = text.replace(new RegExp(`https:\/\/[a-z0-9.-]*${TARGET_HOST}`, 'gi'), `https://${currentHost}`);
             text = text.replace(new RegExp(`\/\/${TARGET_HOST}`, 'g'), `//${currentHost}`);
 
-            // ⭐ サーバー側で画像URLを強制的に書き換え
+            // ⭐ 画像URLを書き換え
             text = rewriteImageUrls(text);
 
             // ⭐ インジェクション
