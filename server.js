@@ -48,7 +48,7 @@ app.use((req, res, next) => {
 });
 
 // ==========================================
-// 3. 画像プロキシ
+// 3. 画像プロキシ（修正版）
 // ==========================================
 const proxyAgent = new https.Agent({ keepAlive: true, maxSockets: 512, timeout: 60000 });
 
@@ -60,15 +60,22 @@ app.get('/_img_/', async (req, res) => {
 
     const fetchOptions = {
         headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+            'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8',
             'Accept-Encoding': 'identity',
             'Referer': 'https://mangarw.com/',
-            'Origin': 'https://mangarw.com/'
+            'Origin': 'https://mangarw.com/',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
+            'Sec-Fetch-Dest': 'image',
+            'Sec-Fetch-Mode': 'no-cors',
+            'Sec-Fetch-Site': 'cross-site'
         },
         agent: proxyAgent,
         timeout: 30000,
-        compress: false
+        compress: false,
+        redirect: 'follow'
     };
 
     try {
@@ -76,12 +83,26 @@ app.get('/_img_/', async (req, res) => {
 
         if (!imgRes.ok) {
             console.log(`[Image] Failed: ${imgUrl} -> ${imgRes.status}`);
-            return res.status(502).send('Image load failed');
+            
+            // ⭐ リトライ（1回）
+            console.log(`[Image] Retrying...`);
+            const retryRes = await fetch(imgUrl, fetchOptions);
+            if (!retryRes.ok) {
+                console.log(`[Image] Retry failed: ${retryRes.status}`);
+                return res.status(502).send('Image load failed');
+            }
+            
+            const contentType = retryRes.headers.get('content-type') || 'image/webp';
+            res.set('Access-Control-Allow-Origin', '*');
+            res.set('Cache-Control', 'public, max-age=3600');
+            res.set('Content-Type', contentType);
+            retryRes.body.pipe(res);
+            return;
         }
 
         const contentType = imgRes.headers.get('content-type') || 'image/webp';
         res.set('Access-Control-Allow-Origin', '*');
-        res.set('Cache-Control', 'public, max-age=86400, immutable');
+        res.set('Cache-Control', 'public, max-age=3600');
         res.set('Content-Type', contentType);
         res.removeHeader('content-length');
         
@@ -195,7 +216,7 @@ app.all('*', async (req, res) => {
     if (req.url === '/favicon.ico') return res.status(204).end();
 
     // ==========================================
-    // ⭐ view-count リクエストを特別に処理（修正箇所）
+    // ⭐ view-count リクエストを特別に処理
     // ==========================================
     if (req.url.includes('/view-count')) {
         const targetUrl = `https://mangarw.com${req.url}`;
