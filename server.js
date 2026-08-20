@@ -3,6 +3,7 @@ const fetch = require('node-fetch');
 const https = require('https');
 const path = require('path');
 const fs = require('fs');
+const zlib = require('zlib'); // ⭐ 追加
 const app = express();
 
 // ==========================================
@@ -35,7 +36,7 @@ app.use((req, res, next) => {
 const UV_DYNAMIC_PATHS = [
     '/proxy', '/prxy', '/baremux', '/epoxy', '/libcurl', 
     '/register-sw.mjs', '/uv', '/~uv', '/bare', 
-    '/_img_/' // ← 画像プロキシも保護
+    '/_img_/'
 ];
 
 app.use((req, res, next) => {
@@ -47,7 +48,7 @@ app.use((req, res, next) => {
 });
 
 // ==========================================
-// 3. 【新設】外部CDNを使った超圧縮・画像プロキシ
+// 3. 外部CDNを使った超圧縮・画像プロキシ
 // ==========================================
 const proxyAgent = new https.Agent({ keepAlive: true, maxSockets: 512, timeout: 60000 });
 
@@ -55,7 +56,6 @@ app.get('/_img_/', async (req, res) => {
     const imgUrl = req.query.url;
     if (!imgUrl) return res.status(400).end();
 
-    // 🌟 wsrv.nl を使って横幅720px、WebP、画質40%に超圧縮（通信量を1/10に！）
     const cdnUrl = `https://wsrv.nl/?url=${encodeURIComponent(imgUrl)}&w=720&output=webp&q=40`;
 
     try {
@@ -67,7 +67,6 @@ app.get('/_img_/', async (req, res) => {
         res.set('Access-Control-Allow-Origin', '*');
         res.set('Cache-Control', 'public, max-age=31536000, immutable');
 
-        // 万が一 wsrv.nl が画像を弾いた場合（リファラ制限など）のフェイルセーフ（保険）
         if (!imgRes.ok) {
             console.log(`[CDN Miss] Fallback to direct fetch: ${imgUrl}`);
             const fallbackRes = await fetch(imgUrl, {
@@ -107,14 +106,12 @@ const INJECT_CODE = `
   (function() {
     window.open = () => null;
 
-    // 画像のURLを「超圧縮プロキシ」経由に書き換える
     const processImages = () => {
       document.querySelectorAll('img').forEach(img => {
         const src = img.dataset.src || img.getAttribute('src');
         if (src && !src.startsWith('data:') && !src.includes('/_img_/?url=')) {
           const absUrl = src.startsWith('http') ? src : window.location.origin + (src.startsWith('/') ? src : '/' + src);
           const proxyUrl = '/_img_/?url=' + encodeURIComponent(absUrl);
-          
           img.setAttribute('src', proxyUrl);
           img.setAttribute('data-src', proxyUrl);
           img.removeAttribute('loading'); 
@@ -160,6 +157,20 @@ const INJECT_CODE = `
 </script>
 `;
 
+// ==========================================
+// 圧縮展開ヘルパー関数
+// ==========================================
+function decompressBuffer(buffer, encoding) {
+    if (encoding.includes('gzip')) {
+        return zlib.gunzipSync(buffer);
+    } else if (encoding.includes('br')) {
+        return zlib.brotliDecompressSync(buffer);
+    } else if (encoding.includes('deflate')) {
+        return zlib.inflateSync(buffer);
+    }
+    return buffer;
+}
+
 app.all('*', async (req, res) => {
     if (req.url === '/favicon.ico') return res.status(204).end();
 
@@ -170,17 +181,17 @@ app.all('*', async (req, res) => {
     delete h.host; delete h.connection; delete h['content-length']; 
     h['Origin'] = TARGET_BASE;
     h['Referer'] = TARGET_BASE + '/';
-    h['Accept-Encoding'] = 'identity'; 
+    // ⭐ Accept-Encoding は維持（圧縮されたまま取得する）
+    // h['Accept-Encoding'] = 'gzip, deflate, br';
 
     try {
         const response = await fetch(targetUrl, {
             method: req.method,
             headers: h,
             agent: proxyAgent,
-            compress: true, 
-            redirect: 'manual', 
+            redirect: 'manual',
             body: (req.method !== 'GET' && req.method !== 'HEAD') ? req.body : undefined,
-            timeout: 15000 
+            timeout: 15000
         });
 
         let resHeaders = {};
@@ -206,9 +217,10 @@ app.all('*', async (req, res) => {
         }
 
         const contentType = response.headers.get("content-type") || "";
+        const contentEncoding = response.headers.get("content-encoding") || "";
 
         // ==========================================
-        // ⭐ 画像・バイナリは最優先で処理（文字化け防止）
+        // ⭐ 画像・バイナリは最優先で処理
         // ==========================================
         const isBinary = 
             contentType.startsWith("image/") ||
@@ -223,15 +235,28 @@ app.all('*', async (req, res) => {
             res.set(resHeaders);
             res.status(response.status);
             response.body.pipe(res);
-            return; // ここで終了！
+            return;
         }
 
         // ==========================================
-        // HTML処理
+        // ⭐ HTML処理（圧縮展開対応版）
         // ==========================================
         if (contentType.includes("text/html")) {
-            let text = await response.text();
+            // バッファを取得
+            const buffer = await response.buffer();
             
+            // 圧縮を展開
+            let decompressed;
+            try {
+                decompressed = decompressBuffer(buffer, contentEncoding);
+            } catch (e) {
+                console.log(`[Decompress Error] ${e.message}`);
+                decompressed = buffer; // 展開失敗時はそのまま
+            }
+            
+            let text = decompressed.toString('utf-8');
+            
+            // HTML加工処理
             text = text.replace(/onclick=".*?"/gi, 'data-removed-click=""');
             const badDomains = ['universityshocksooner.com', 'adexchangerapid.com', 'gomuraw.js', 'platform.pubadx.one'];
             badDomains.forEach(d => {
@@ -245,8 +270,11 @@ app.all('*', async (req, res) => {
             text = text.replace(new RegExp(`\/\/${TARGET_HOST}`, 'g'), `//${currentHost}`);
 
             text = text.replace('<head>', '<head>' + INJECT_CODE);
+            
+            // レスポンス送信（圧縮せずに送る）
             res.set(resHeaders);
             res.set("Content-Type", "text/html; charset=utf-8");
+            res.set("Content-Encoding", "identity"); // 圧縮なしで送信
             
             return res.status(response.status).send(text);
         }
@@ -255,9 +283,12 @@ app.all('*', async (req, res) => {
         // CSS処理
         // ==========================================
         if (contentType.includes("css")) {
-            let cssText = await response.text();
+            const buffer = await response.buffer();
+            let decompressed = decompressBuffer(buffer, contentEncoding);
+            let cssText = decompressed.toString('utf-8');
             cssText = cssText.replace(/url\(['"]?\//g, `url("https://${currentHost}/`);
             res.set(resHeaders);
+            res.set("Content-Encoding", "identity");
             return res.status(response.status).send(cssText);
         }
 
@@ -265,8 +296,11 @@ app.all('*', async (req, res) => {
         // JavaScript / JSON 処理
         // ==========================================
         if (contentType.includes("javascript") || contentType.includes("json")) {
-            const text = await response.text();
+            const buffer = await response.buffer();
+            let decompressed = decompressBuffer(buffer, contentEncoding);
+            const text = decompressed.toString('utf-8');
             res.set(resHeaders);
+            res.set("Content-Encoding", "identity");
             return res.status(response.status).send(text);
         }
 
@@ -278,6 +312,7 @@ app.all('*', async (req, res) => {
         response.body.pipe(res);
 
     } catch (error) {
+        console.error(`[Proxy Error] ${error.message}`);
         if (!res.headersSent) res.status(502).send("Server Error");
     }
 });
