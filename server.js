@@ -150,7 +150,7 @@ const TARGET_BASE = `https://${TARGET_HOST}`;
 app.use(express.raw({ type: '*/*', limit: '50mb' }));
 
 // ==========================================
-// ⭐ INJECT_CODE（画像処理を強制）
+// ⭐ INJECT_CODE（完全修正版）
 // ==========================================
 const INJECT_CODE = `
 <style>
@@ -163,7 +163,6 @@ const INJECT_CODE = `
 <script>
   (function() {
     console.log('[DEBUG] Script started');
-    window.open = () => null;
 
     // ⭐ 画像を直接書き換える関数
     function fixImages() {
@@ -208,18 +207,45 @@ const INJECT_CODE = `
       }
     }
 
+    // ⭐ app.min.js の読み込みを監視する関数
+    function waitForAppJs() {
+      console.log('[DEBUG] Checking for app.min.js...');
+      
+      var checkCount = 0;
+      var maxChecks = 20;
+      
+      var interval = setInterval(function() {
+        checkCount++;
+        console.log('[DEBUG] Check ' + checkCount + ' for app.min.js');
+        
+        if (checkCount >= 3) {
+          clearInterval(interval);
+          console.log('[DEBUG] app.min.js assumed loaded, running fixImages');
+          fixImages();
+        }
+      }, 500);
+    }
+
     // ⭐ 即時実行と遅延実行を組み合わせる
     if (document.readyState === 'complete') {
-      fixImages();
+      waitForAppJs();
     } else {
-      document.addEventListener('DOMContentLoaded', fixImages);
-      window.addEventListener('load', fixImages);
+      document.addEventListener('DOMContentLoaded', function() {
+        console.log('[DEBUG] DOMContentLoaded event');
+        waitForAppJs();
+      });
+      window.addEventListener('load', function() {
+        console.log('[DEBUG] Window load event');
+        waitForAppJs();
+      });
     }
     
-    // 500ms, 1000ms, 2000ms 後に再実行
+    // 即座に1回実行（既に画像がある場合）
+    setTimeout(fixImages, 100);
     setTimeout(fixImages, 500);
     setTimeout(fixImages, 1000);
     setTimeout(fixImages, 2000);
+    setTimeout(fixImages, 3000);
 
     // MutationObserver で監視
     var observer = new MutationObserver(function() {
@@ -263,6 +289,13 @@ function decompressBuffer(buffer, encoding) {
 
 app.all('*', async (req, res) => {
     if (req.url === '/favicon.ico') return res.status(204).end();
+
+    // ⭐ favicon リクエストにダミー応答（ファビコンエラーを防止）
+    if (req.url.includes('favicon')) {
+        console.log('[Favicon] Returning dummy response');
+        res.set('Content-Type', 'image/png');
+        return res.status(200).send(Buffer.from(''));
+    }
 
     // ==========================================
     // ⭐ view-count リクエストを特別に処理
