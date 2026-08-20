@@ -3,7 +3,7 @@ const fetch = require('node-fetch');
 const https = require('https');
 const path = require('path');
 const fs = require('fs');
-const zlib = require('zlib'); // ⭐ 追加
+const zlib = require('zlib');
 const app = express();
 
 // ==========================================
@@ -158,15 +158,21 @@ const INJECT_CODE = `
 `;
 
 // ==========================================
-// 圧縮展開ヘルパー関数
+// ⭐ 圧縮展開関数
 // ==========================================
 function decompressBuffer(buffer, encoding) {
-    if (encoding.includes('gzip')) {
-        return zlib.gunzipSync(buffer);
-    } else if (encoding.includes('br')) {
-        return zlib.brotliDecompressSync(buffer);
-    } else if (encoding.includes('deflate')) {
-        return zlib.inflateSync(buffer);
+    if (!encoding || encoding === 'identity') return buffer;
+    
+    try {
+        if (encoding.includes('gzip')) {
+            return zlib.gunzipSync(buffer);
+        } else if (encoding.includes('br')) {
+            return zlib.brotliDecompressSync(buffer);
+        } else if (encoding.includes('deflate')) {
+            return zlib.inflateSync(buffer);
+        }
+    } catch (e) {
+        console.log(`[Decompress Error] ${e.message}`);
     }
     return buffer;
 }
@@ -181,8 +187,7 @@ app.all('*', async (req, res) => {
     delete h.host; delete h.connection; delete h['content-length']; 
     h['Origin'] = TARGET_BASE;
     h['Referer'] = TARGET_BASE + '/';
-    // ⭐ Accept-Encoding は維持（圧縮されたまま取得する）
-    // h['Accept-Encoding'] = 'gzip, deflate, br';
+    h['Accept-Encoding'] = 'gzip, deflate, br';
 
     try {
         const response = await fetch(targetUrl, {
@@ -220,7 +225,7 @@ app.all('*', async (req, res) => {
         const contentEncoding = response.headers.get("content-encoding") || "";
 
         // ==========================================
-        // ⭐ 画像・バイナリは最優先で処理
+        // ⭐ 画像・バイナリ処理
         // ==========================================
         const isBinary = 
             contentType.startsWith("image/") ||
@@ -239,22 +244,17 @@ app.all('*', async (req, res) => {
         }
 
         // ==========================================
-        // ⭐ HTML処理（圧縮展開対応版）
+        // ⭐ HTML処理（修正版）
         // ==========================================
         if (contentType.includes("text/html")) {
-            // バッファを取得
             const buffer = await response.buffer();
+            console.log(`[HTML] Content-Encoding: ${contentEncoding}, Buffer size: ${buffer.length}`);
             
-            // 圧縮を展開
-            let decompressed;
-            try {
-                decompressed = decompressBuffer(buffer, contentEncoding);
-            } catch (e) {
-                console.log(`[Decompress Error] ${e.message}`);
-                decompressed = buffer; // 展開失敗時はそのまま
-            }
-            
+            const decompressed = decompressBuffer(buffer, contentEncoding);
             let text = decompressed.toString('utf-8');
+            
+            console.log(`[HTML] Decompressed size: ${text.length}`);
+            console.log(`[HTML] First 200 chars: ${text.substring(0, 200)}`);
             
             // HTML加工処理
             text = text.replace(/onclick=".*?"/gi, 'data-removed-click=""');
@@ -271,10 +271,10 @@ app.all('*', async (req, res) => {
 
             text = text.replace('<head>', '<head>' + INJECT_CODE);
             
-            // レスポンス送信（圧縮せずに送る）
             res.set(resHeaders);
             res.set("Content-Type", "text/html; charset=utf-8");
-            res.set("Content-Encoding", "identity"); // 圧縮なしで送信
+            res.set("Content-Encoding", "identity");
+            res.removeHeader('content-length');
             
             return res.status(response.status).send(text);
         }
@@ -284,11 +284,12 @@ app.all('*', async (req, res) => {
         // ==========================================
         if (contentType.includes("css")) {
             const buffer = await response.buffer();
-            let decompressed = decompressBuffer(buffer, contentEncoding);
+            const decompressed = decompressBuffer(buffer, contentEncoding);
             let cssText = decompressed.toString('utf-8');
             cssText = cssText.replace(/url\(['"]?\//g, `url("https://${currentHost}/`);
             res.set(resHeaders);
             res.set("Content-Encoding", "identity");
+            res.removeHeader('content-length');
             return res.status(response.status).send(cssText);
         }
 
@@ -297,15 +298,16 @@ app.all('*', async (req, res) => {
         // ==========================================
         if (contentType.includes("javascript") || contentType.includes("json")) {
             const buffer = await response.buffer();
-            let decompressed = decompressBuffer(buffer, contentEncoding);
+            const decompressed = decompressBuffer(buffer, contentEncoding);
             const text = decompressed.toString('utf-8');
             res.set(resHeaders);
             res.set("Content-Encoding", "identity");
+            res.removeHeader('content-length');
             return res.status(response.status).send(text);
         }
 
         // ==========================================
-        // その他（フォールバック）
+        // その他
         // ==========================================
         res.set(resHeaders);
         res.status(response.status);
