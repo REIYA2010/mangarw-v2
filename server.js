@@ -48,7 +48,7 @@ app.use((req, res, next) => {
 });
 
 // ==========================================
-// 3. 画像プロキシ（外部CDN対応版）
+// 3. 画像プロキシ（修正版）
 // ==========================================
 const proxyAgent = new https.Agent({ keepAlive: true, maxSockets: 512, timeout: 60000 });
 
@@ -74,10 +74,8 @@ app.get('/_img_/', async (req, res) => {
         console.log(`[Image] Decode failed, using original: ${imgUrl}`);
     }
 
-    // ⭐ スペースをエンコード
     let finalUrl = decodedUrl.replace(/ /g, '%20');
     
-    // ⭐ 外部CDN（cdn.mangaraw123.com）のURLもそのまま使用
     if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
         if (finalUrl.startsWith('//')) {
             finalUrl = 'https:' + finalUrl;
@@ -92,14 +90,12 @@ app.get('/_img_/', async (req, res) => {
 
     const fetchOptions = {
         headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
             'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8',
             'Accept-Encoding': 'identity',
             'Referer': 'https://mangarw.com/',
-            'Origin': 'https://mangarw.com/',
-            'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache'
+            'Origin': 'https://mangarw.com/'
         },
         agent: proxyAgent,
         timeout: 30000,
@@ -110,12 +106,21 @@ app.get('/_img_/', async (req, res) => {
     try {
         const imgRes = await fetch(finalUrl, fetchOptions);
 
+        const contentType = imgRes.headers.get('content-type') || '';
+        
+        // ⭐ レスポンスが画像でない場合の処理
+        if (!contentType.startsWith('image/')) {
+            console.log(`[Image] Warning: Response is not an image (${contentType})`);
+            const text = await imgRes.text();
+            console.log(`[Image] Response text: ${text.substring(0, 200)}`);
+            return res.status(502).send('Invalid image response');
+        }
+
         if (!imgRes.ok) {
             console.log(`[Image] Failed: ${finalUrl} -> ${imgRes.status}`);
             return res.status(502).send(`Image load failed: ${imgRes.status}`);
         }
 
-        const contentType = imgRes.headers.get('content-type') || 'image/webp';
         console.log(`[Image] Success: ${finalUrl} -> ${contentType}`);
         
         res.set('Access-Control-Allow-Origin', '*');
@@ -143,9 +148,6 @@ const TARGET_BASE = `https://${TARGET_HOST}`;
 
 app.use(express.raw({ type: '*/*', limit: '50mb' }));
 
-// ==========================================
-// ⭐ INJECT_CODE（processImages を修正）
-// ==========================================
 const INJECT_CODE = `
 <style>
   iframe, .pop--excl, .bg-ssp-11557, [id*="bg-ssp"], [class*="ad-"], #toast,
@@ -157,17 +159,14 @@ const INJECT_CODE = `
   (function() {
     window.open = () => null;
 
-    // ⭐ 修正された画像処理関数（data-src 対応、スペースエンコード）
     const processImages = () => {
       console.log('[DEBUG] processImages called');
       document.querySelectorAll('img').forEach((img, index) => {
-        // ⭐ data-src を優先（遅延読み込み対策）
         let src = img.dataset.src || img.getAttribute('src');
         console.log('[DEBUG] Image ' + index + ': src =', src);
         
         if (!src) return;
         if (src.startsWith('data:')) {
-          // data-src があればそれを使う
           if (img.dataset.src && !img.dataset.src.startsWith('data:')) {
             src = img.dataset.src;
             console.log('[DEBUG] Image ' + index + ': using data-src =', src);
@@ -177,7 +176,6 @@ const INJECT_CODE = `
         }
         if (src.includes('/_img_/?url=')) return;
         
-        // ⭐ URLをエンコード（スペースなどを処理）
         let absUrl;
         if (src.startsWith('https://') || src.startsWith('http://')) {
           absUrl = src;
@@ -189,9 +187,7 @@ const INJECT_CODE = `
           absUrl = 'https://mangarw.com/' + src;
         }
         
-        // ⭐ スペースをエンコード
         absUrl = absUrl.replace(/ /g, '%20');
-        
         const proxyUrl = '/_img_/?url=' + encodeURIComponent(absUrl);
         console.log('[DEBUG] Image ' + index + ': proxyUrl =', proxyUrl);
         
