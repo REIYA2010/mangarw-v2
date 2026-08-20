@@ -52,7 +52,6 @@ app.use((req, res, next) => {
 // ==========================================
 const proxyAgent = new https.Agent({ keepAlive: true, maxSockets: 512, timeout: 60000 });
 
-// ⭐ /_img_ へのアクセスをリダイレクト
 app.get('/_img_', (req, res) => {
     const query = req.query.url ? `?url=${encodeURIComponent(req.query.url)}` : '';
     res.redirect(`/_img_/${query}`);
@@ -67,7 +66,6 @@ app.get('/_img_/', async (req, res) => {
 
     console.log(`[Image] Requesting: ${imgUrl}`);
 
-    // ⭐ URLのデコードを試みる
     let decodedUrl = imgUrl;
     try {
         decodedUrl = decodeURIComponent(imgUrl);
@@ -75,6 +73,18 @@ app.get('/_img_/', async (req, res) => {
     } catch (e) {
         console.log(`[Image] Decode failed, using original: ${imgUrl}`);
     }
+
+    // ⭐ 画像URLが相対パスの場合、絶対URLに変換
+    let finalUrl = decodedUrl;
+    if (finalUrl.startsWith('//')) {
+        finalUrl = 'https:' + finalUrl;
+    } else if (finalUrl.startsWith('/')) {
+        finalUrl = 'https://mangarw.com' + finalUrl;
+    } else if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
+        finalUrl = 'https://mangarw.com/' + finalUrl;
+    }
+
+    console.log(`[Image] Final URL: ${finalUrl}`);
 
     const fetchOptions = {
         headers: {
@@ -94,15 +104,15 @@ app.get('/_img_/', async (req, res) => {
     };
 
     try {
-        const imgRes = await fetch(decodedUrl, fetchOptions);
+        const imgRes = await fetch(finalUrl, fetchOptions);
 
         if (!imgRes.ok) {
-            console.log(`[Image] Failed: ${decodedUrl} -> ${imgRes.status}`);
+            console.log(`[Image] Failed: ${finalUrl} -> ${imgRes.status}`);
             return res.status(502).send(`Image load failed: ${imgRes.status}`);
         }
 
         const contentType = imgRes.headers.get('content-type') || 'image/webp';
-        console.log(`[Image] Success: ${decodedUrl} -> ${contentType}`);
+        console.log(`[Image] Success: ${finalUrl} -> ${contentType}`);
         
         res.set('Access-Control-Allow-Origin', '*');
         res.set('Cache-Control', 'public, max-age=86400, immutable');
@@ -129,6 +139,9 @@ const TARGET_BASE = `https://${TARGET_HOST}`;
 
 app.use(express.raw({ type: '*/*', limit: '50mb' }));
 
+// ==========================================
+// ⭐ INJECT_CODE（画像処理を修正）
+// ==========================================
 const INJECT_CODE = `
 <style>
   iframe, .pop--excl, .bg-ssp-11557, [id*="bg-ssp"], [class*="ad-"], #toast,
@@ -140,17 +153,25 @@ const INJECT_CODE = `
   (function() {
     window.open = () => null;
 
+    // ⭐ 修正された画像処理関数（相対パスを絶対URLに変換）
     const processImages = () => {
       document.querySelectorAll('img').forEach(img => {
         const src = img.dataset.src || img.getAttribute('src');
-        console.log('[DEBUG] Original src:', src);
         if (src && !src.startsWith('data:') && !src.includes('/_img_/?url=')) {
-          const absUrl = src.startsWith('http') ? src : window.location.origin + (src.startsWith('/') ? src : '/' + src);
+          let absUrl;
+          if (src.startsWith('//')) {
+            absUrl = 'https:' + src;
+          } else if (src.startsWith('/')) {
+            absUrl = 'https://mangarw.com' + src;
+          } else if (src.startsWith('http://') || src.startsWith('https://')) {
+            absUrl = src;
+          } else {
+            absUrl = 'https://mangarw.com/' + src;
+          }
           const proxyUrl = '/_img_/?url=' + encodeURIComponent(absUrl);
-          console.log('[DEBUG] Proxy url:', proxyUrl);
           img.setAttribute('src', proxyUrl);
           img.setAttribute('data-src', proxyUrl);
-          img.removeAttribute('loading'); 
+          img.removeAttribute('loading');
         }
       });
     };
