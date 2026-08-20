@@ -48,7 +48,7 @@ app.use((req, res, next) => {
 });
 
 // ==========================================
-// 3. 画像プロキシ（デバッグ強化版）
+// 3. 画像プロキシ（修正版）
 // ==========================================
 const proxyAgent = new https.Agent({ keepAlive: true, maxSockets: 512, timeout: 60000 });
 
@@ -64,7 +64,7 @@ app.get('/_img_/', async (req, res) => {
         return res.status(400).send('Missing url parameter');
     }
 
-    console.log(`[Image] Raw URL parameter: ${imgUrl}`);
+    console.log(`[Image] Requesting: ${imgUrl}`);
 
     let decodedUrl = imgUrl;
     try {
@@ -87,22 +87,6 @@ app.get('/_img_/', async (req, res) => {
     
     finalUrl = finalUrl.replace(/ /g, '%20');
     console.log(`[Image] Final URL: ${finalUrl}`);
-
-    // ⭐ HEADリクエストで事前確認
-    try {
-        const headRes = await fetch(finalUrl, {
-            method: 'HEAD',
-            headers: {
-                'User-Agent': 'Mozilla/5.0',
-                'Accept-Encoding': 'identity'
-            },
-            timeout: 5000
-        });
-        console.log(`[Image] HEAD status: ${headRes.status}`);
-        console.log(`[Image] HEAD content-type: ${headRes.headers.get('content-type')}`);
-    } catch (e) {
-        console.log(`[Image] HEAD failed: ${e.message}`);
-    }
 
     const fetchOptions = {
         headers: {
@@ -447,10 +431,20 @@ app.all('*', async (req, res) => {
         }
 
         // ==========================================
-        // JavaScript / JSON 処理
+        // ⭐ JavaScript / JSON 処理（zstd 対応版）
         // ==========================================
         if (contentType.includes("javascript") || contentType.includes("json")) {
             const buffer = await response.buffer();
+            
+            // ⭐ zstd の場合はそのままブラウザに送信
+            if (contentEncoding.includes('zstd')) {
+                console.log(`[JS] zstd detected, passing through to browser`);
+                res.set(resHeaders);
+                res.set("Content-Type", contentType);
+                res.set("Content-Encoding", "zstd");
+                return res.status(response.status).send(buffer);
+            }
+            
             let text;
             if (contentEncoding && contentEncoding !== 'identity') {
                 const decompressed = decompressBuffer(buffer, contentEncoding);
