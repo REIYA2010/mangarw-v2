@@ -150,7 +150,7 @@ const TARGET_BASE = `https://${TARGET_HOST}`;
 app.use(express.raw({ type: '*/*', limit: '50mb' }));
 
 // ==========================================
-// ⭐ INJECT_CODE（画像処理を強制）
+// ⭐ INJECT_CODE（iPad対応版）
 // ==========================================
 const INJECT_CODE = `
 <style>
@@ -173,18 +173,31 @@ const INJECT_CODE = `
       var img = images[i];
       var src = img.dataset.src || img.getAttribute('src');
       
+      console.log('[DEBUG] Image ' + i + ': src =', src);
+      
       if (!src) continue;
       if (src.indexOf('data:') === 0) {
         if (img.dataset.src && img.dataset.src.indexOf('data:') !== 0) {
           src = img.dataset.src;
+          console.log('[DEBUG] Image ' + i + ': using data-src =', src);
         } else {
           continue;
         }
       }
       if (src.indexOf('/_img_/') !== -1) continue;
-      if (src.indexOf('data:') === 0) continue;
       
-      var proxyUrl = '/_img_/?url=' + encodeURIComponent(src);
+      var absUrl = src;
+      if (absUrl.indexOf('https://') !== 0 && absUrl.indexOf('http://') !== 0) {
+        if (absUrl.indexOf('//') === 0) {
+          absUrl = 'https:' + absUrl;
+        } else if (absUrl.indexOf('/') === 0) {
+          absUrl = 'https://mangarw.com' + absUrl;
+        } else {
+          absUrl = 'https://mangarw.com/' + absUrl;
+        }
+      }
+      
+      var proxyUrl = '/_img_/?url=' + encodeURIComponent(absUrl);
       console.log('[DEBUG] Image ' + i + ': proxyUrl =', proxyUrl);
       
       img.setAttribute('src', proxyUrl);
@@ -198,14 +211,15 @@ const INJECT_CODE = `
     console.log('[DEBUG] Changed ' + changed + ' images');
   }
 
-  setTimeout(fixImages, 0);
-  setTimeout(fixImages, 100);
-  setTimeout(fixImages, 300);
-  setTimeout(fixImages, 500);
-  setTimeout(fixImages, 1000);
-  setTimeout(fixImages, 2000);
-  setTimeout(fixImages, 3000);
-  setTimeout(fixImages, 5000);
+  var delays = [0, 100, 300, 500, 1000, 2000, 3000, 5000, 10000, 15000, 20000];
+  for (var d = 0; d < delays.length; d++) {
+    (function(delay) {
+      setTimeout(function() {
+        console.log('[DEBUG] Delayed fixImages (' + delay + 'ms)');
+        fixImages();
+      }, delay);
+    })(delays[d]);
+  }
 
   document.addEventListener('DOMContentLoaded', function() {
     console.log('[DEBUG] DOMContentLoaded');
@@ -218,19 +232,24 @@ const INJECT_CODE = `
   });
 
   var observer = new MutationObserver(function() {
+    console.log('[DEBUG] MutationObserver triggered');
     fixImages();
   });
   observer.observe(document.body, { childList: true, subtree: true });
 
   setInterval(function() {
     var images = document.querySelectorAll('img');
+    var needsFix = false;
     for (var i = 0; i < images.length; i++) {
       var src = images[i].getAttribute('src');
       if (src && src.indexOf('https://') === 0 && src.indexOf('/_img_/') === -1) {
-        console.log('[DEBUG] Interval: fixing images');
-        fixImages();
+        needsFix = true;
         break;
       }
+    }
+    if (needsFix) {
+      console.log('[DEBUG] Interval: fixing images');
+      fixImages();
     }
   }, 2000);
 
@@ -362,41 +381,6 @@ app.all('*', async (req, res) => {
             return;
         }
 
-        // ==========================================
-        // ⭐ JavaScript処理（zstd圧縮を解除してから送信）
-        // ==========================================
-        if (contentType.includes("javascript") || contentType.includes("json")) {
-            const buffer = await response.buffer();
-            console.log(`[JS] Content-Encoding: ${contentEncoding}, Buffer size: ${buffer.length}`);
-            
-            // ⭐ zstd圧縮を解除（ブラウザが解凍できるようにする）
-            let text;
-            if (contentEncoding.includes('zstd')) {
-                console.log(`[JS] zstd detected, decompressing...`);
-                // ここでは圧縮を解除せず、ブラウザに任せる
-                // ただし、ブラウザがzstdをサポートしていない場合はエラーになる
-                // 代替案：圧縮を解除してから送信（zstd-codec が必要）
-                console.log(`[JS] zstd passed through to browser (may cause errors on some browsers)`);
-                res.set(resHeaders);
-                res.set("Content-Type", contentType);
-                res.set("Content-Encoding", "zstd");
-                return res.status(response.status).send(buffer);
-            }
-            
-            if (contentEncoding && contentEncoding !== 'identity') {
-                const decompressed = decompressBuffer(buffer, contentEncoding);
-                text = decompressed.toString('utf-8');
-            } else {
-                text = buffer.toString('utf-8');
-            }
-            
-            console.log(`[JS] Decompressed size: ${text.length}`);
-            res.set(resHeaders);
-            res.set("Content-Encoding", "identity");
-            res.removeHeader('content-length');
-            return res.status(response.status).send(text);
-        }
-
         if (contentType.includes("text/html")) {
             const buffer = await response.buffer();
             console.log(`[HTML] Content-Encoding: ${contentEncoding}, Buffer size: ${buffer.length}`);
@@ -446,6 +430,25 @@ app.all('*', async (req, res) => {
             res.set("Content-Encoding", "identity");
             res.removeHeader('content-length');
             return res.status(response.status).send(cssText);
+        }
+
+        if (contentType.includes("javascript") || contentType.includes("json")) {
+            const buffer = await response.buffer();
+            
+            if (contentEncoding.includes('zstd')) {
+                console.log(`[JS] zstd detected, passing through to browser`);
+                res.set(resHeaders);
+                res.set("Content-Type", contentType);
+                res.set("Content-Encoding", "zstd");
+                return res.status(response.status).send(buffer);
+            }
+            
+            const decompressed = decompressBuffer(buffer, contentEncoding);
+            let text = decompressed.toString('utf-8');
+            res.set(resHeaders);
+            res.set("Content-Encoding", "identity");
+            res.removeHeader('content-length');
+            return res.status(response.status).send(text);
         }
 
         res.set(resHeaders);
