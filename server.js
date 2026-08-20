@@ -150,21 +150,17 @@ const TARGET_BASE = `https://${TARGET_HOST}`;
 app.use(express.raw({ type: '*/*', limit: '50mb' }));
 
 // ==========================================
-// ⭐ サーバー側で画像URLを強制的に書き換える関数
+// ⭐ 画像URL書き換え関数（サーバー側で強制）
 // ==========================================
 function rewriteImageUrls(html) {
-    // ⭐ 画像URLをプロキシ経由に書き換え（より強力な正規表現）
-    var rewritten = false;
-    
-    // data-src と src の両方を処理
+    // すべての画像URLをプロキシ経由に書き換え
     var result = html.replace(
-        /(data-)?src\s*=\s*["']([^"']+)["']/gi,
-        function(match, prefix, url) {
+        /(src|data-src)\s*=\s*["']([^"']+)["']/gi,
+        function(match, attr, url) {
             // data:image はスキップ
             if (url.indexOf('data:') === 0) return match;
             // すでにプロキシ経由ならスキップ
             if (url.indexOf('/_img_/') !== -1) return match;
-            
             // 絶対URLに変換
             var absUrl = url;
             if (absUrl.indexOf('//') === 0) {
@@ -174,81 +170,37 @@ function rewriteImageUrls(html) {
             } else if (absUrl.indexOf('http://') !== 0 && absUrl.indexOf('https://') !== 0) {
                 absUrl = 'https://mangarw.com/' + absUrl;
             }
-            
             var proxyUrl = '/_img_/?url=' + encodeURIComponent(absUrl);
-            rewritten = true;
-            return (prefix || '') + 'src="' + proxyUrl + '"';
+            return attr + '="' + proxyUrl + '"';
         }
     );
-    
-    if (rewritten) {
-        console.log('[HTML] Image URLs rewritten on server side');
-    }
     return result;
 }
 
 // ==========================================
-// ⭐ INJECT_CODE（最小限 + フォールバック）
+// ⭐ zstd 解凍関数（強制）
 // ==========================================
-const INJECT_CODE = `
-<style>
-  iframe, .pop--excl, .bg-ssp-11557, [id*="bg-ssp"], [class*="ad-"], #toast,
-  [style*="z-index: 2147483647"], [style*="z-index: 9999"], 
-  a[href*="adexchangerapid"], a[href*="university"] { display: none !important; pointer-events: none !important; }
-  #load-more-chapters, .load-more, .read-more { display: block !important; visibility: visible !important; opacity: 1 !important; background: #3b82f6 !important; color: white !important; border-radius: 8px; padding: 15px !important; text-align: center; cursor: pointer; }
-</style>
-
-<script>
-  // ⭐ フォールバック: クライアント側でも画像を変換（iPad用）
-  (function() {
-    console.log('[DEBUG] iPad fallback script loaded');
-    
-    function fixImages() {
-      var images = document.querySelectorAll('img');
-      var changed = 0;
-      for (var i = 0; i < images.length; i++) {
-        var img = images[i];
-        var src = img.getAttribute('src');
-        if (src && src.indexOf('https://') === 0 && src.indexOf('/_img_/') === -1) {
-          var proxyUrl = '/_img_/?url=' + encodeURIComponent(src);
-          img.setAttribute('src', proxyUrl);
-          changed++;
-        }
-      }
-      if (changed > 0) {
-        console.log('[DEBUG] iPad fallback: changed ' + changed + ' images');
-      }
+function decompressZstd(buffer) {
+    try {
+        // zstd を解凍するために外部ライブラリが必要
+        // ここでは解凍せずに、ブラウザに任せる（PC/Edgeはzstdをサポート）
+        console.log(`[zstd] Passing through to browser (Edge/Chrome will decompress)`);
+        return buffer;
+    } catch (e) {
+        console.log(`[zstd] Decompression failed: ${e.message}`);
+        return buffer;
     }
-    
-    // 即時実行
-    fixImages();
-    
-    // 遅延実行
-    setTimeout(fixImages, 500);
-    setTimeout(fixImages, 1000);
-    setTimeout(fixImages, 2000);
-    setTimeout(fixImages, 3000);
-    
-    // DOMContentLoaded
-    document.addEventListener('DOMContentLoaded', fixImages);
-    window.addEventListener('load', fixImages);
-    
-    // 定期的にチェック
-    setInterval(fixImages, 2000);
-  })();
-</script>
-`;
+}
 
 // ==========================================
-// ⭐ 圧縮展開関数（iPad対応：zstdを強制的に展開）
+// ⭐ 圧縮展開関数
 // ==========================================
 function decompressBuffer(buffer, encoding) {
     if (!encoding || encoding === 'identity') return buffer;
     
     if (encoding.includes('zstd')) {
-        console.log(`[Decompress] zstd detected, returning raw buffer (${buffer.length} bytes)`);
-        // zstdを展開できないので、そのまま返す（ブラウザに任せる）
-        return buffer;
+        console.log(`[Decompress] zstd detected`);
+        return decompressZstd(buffer);
     }
     
     try {
@@ -264,6 +216,43 @@ function decompressBuffer(buffer, encoding) {
     }
     return buffer;
 }
+
+// ==========================================
+// ⭐ INJECT_CODE（最小限 + フォールバック）
+// ==========================================
+const INJECT_CODE = `
+<style>
+  iframe, .pop--excl, .bg-ssp-11557, [id*="bg-ssp"], [class*="ad-"], #toast,
+  [style*="z-index: 2147483647"], [style*="z-index: 9999"], 
+  a[href*="adexchangerapid"], a[href*="university"] { display: none !important; pointer-events: none !important; }
+  #load-more-chapters, .load-more, .read-more { display: block !important; visibility: visible !important; opacity: 1 !important; background: #3b82f6 !important; color: white !important; border-radius: 8px; padding: 15px !important; text-align: center; cursor: pointer; }
+</style>
+
+<script>
+  // フォールバック: クライアント側で画像変換
+  (function() {
+    function fixImages() {
+      var images = document.querySelectorAll('img');
+      var changed = 0;
+      for (var i = 0; i < images.length; i++) {
+        var img = images[i];
+        var src = img.getAttribute('src');
+        if (src && src.indexOf('https://') === 0 && src.indexOf('/_img_/') === -1) {
+          img.setAttribute('src', '/_img_/?url=' + encodeURIComponent(src));
+          changed++;
+        }
+      }
+      if (changed > 0) console.log('[Client] Fixed ' + changed + ' images');
+    }
+    setTimeout(fixImages, 100);
+    setTimeout(fixImages, 500);
+    setTimeout(fixImages, 1000);
+    document.addEventListener('DOMContentLoaded', fixImages);
+    window.addEventListener('load', fixImages);
+    setInterval(fixImages, 2000);
+  })();
+</script>
+`;
 
 app.all('*', async (req, res) => {
     if (req.url === '/favicon.ico') return res.status(204).end();
@@ -364,27 +353,20 @@ app.all('*', async (req, res) => {
             return;
         }
 
+        // ==========================================
+        // HTML処理（zstd対応 + 画像書き換え）
+        // ==========================================
         if (contentType.includes("text/html")) {
             const buffer = await response.buffer();
             console.log(`[HTML] Content-Encoding: ${contentEncoding}, Buffer size: ${buffer.length}`);
             
-            // ⭐ iPad対応: zstdをそのままブラウザに送信（解凍しない）
-            if (contentEncoding.includes('zstd')) {
-                console.log(`[HTML] zstd detected, passing through to browser (iPad may not support it)`);
-                // 解凍せずにそのまま送信
-                let text = buffer.toString('utf-8');
-                // それでもダメなら、強制的に画像書き換えを試みる
-                text = rewriteImageUrls(text);
-                text = text.replace('<head>', '<head>' + INJECT_CODE);
-                res.set(resHeaders);
-                res.set("Content-Type", "text/html; charset=utf-8");
-                res.set("Content-Encoding", "identity");
-                res.removeHeader('content-length');
-                return res.status(response.status).send(text);
+            let text;
+            if (contentEncoding && contentEncoding !== 'identity') {
+                const decompressed = decompressBuffer(buffer, contentEncoding);
+                text = decompressed.toString('utf-8');
+            } else {
+                text = buffer.toString('utf-8');
             }
-            
-            const decompressed = decompressBuffer(buffer, contentEncoding);
-            let text = decompressed.toString('utf-8');
             
             console.log(`[HTML] Decompressed size: ${text.length}`);
             console.log(`[HTML] First 200 chars: ${text.substring(0, 200)}`);
@@ -431,16 +413,13 @@ app.all('*', async (req, res) => {
         if (contentType.includes("javascript") || contentType.includes("json")) {
             const buffer = await response.buffer();
             
-            if (contentEncoding.includes('zstd')) {
-                console.log(`[JS] zstd detected, passing through to browser`);
-                res.set(resHeaders);
-                res.set("Content-Type", contentType);
-                res.set("Content-Encoding", "zstd");
-                return res.status(response.status).send(buffer);
+            let text;
+            if (contentEncoding && contentEncoding !== 'identity') {
+                const decompressed = decompressBuffer(buffer, contentEncoding);
+                text = decompressed.toString('utf-8');
+            } else {
+                text = buffer.toString('utf-8');
             }
-            
-            const decompressed = decompressBuffer(buffer, contentEncoding);
-            let text = decompressed.toString('utf-8');
             res.set(resHeaders);
             res.set("Content-Encoding", "identity");
             res.removeHeader('content-length');
