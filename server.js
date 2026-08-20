@@ -48,7 +48,7 @@ app.use((req, res, next) => {
 });
 
 // ==========================================
-// 3. 画像プロキシ（修正版）
+// 3. 画像プロキシ（外部CDN対応版）
 // ==========================================
 const proxyAgent = new https.Agent({ keepAlive: true, maxSockets: 512, timeout: 60000 });
 
@@ -74,14 +74,18 @@ app.get('/_img_/', async (req, res) => {
         console.log(`[Image] Decode failed, using original: ${imgUrl}`);
     }
 
-    // ⭐ 画像URLが相対パスの場合、絶対URLに変換
-    let finalUrl = decodedUrl;
-    if (finalUrl.startsWith('//')) {
-        finalUrl = 'https:' + finalUrl;
-    } else if (finalUrl.startsWith('/')) {
-        finalUrl = 'https://mangarw.com' + finalUrl;
-    } else if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
-        finalUrl = 'https://mangarw.com/' + finalUrl;
+    // ⭐ スペースをエンコード
+    let finalUrl = decodedUrl.replace(/ /g, '%20');
+    
+    // ⭐ 外部CDN（cdn.mangaraw123.com）のURLもそのまま使用
+    if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
+        if (finalUrl.startsWith('//')) {
+            finalUrl = 'https:' + finalUrl;
+        } else if (finalUrl.startsWith('/')) {
+            finalUrl = 'https://mangarw.com' + finalUrl;
+        } else {
+            finalUrl = 'https://mangarw.com/' + finalUrl;
+        }
     }
 
     console.log(`[Image] Final URL: ${finalUrl}`);
@@ -140,7 +144,7 @@ const TARGET_BASE = `https://${TARGET_HOST}`;
 app.use(express.raw({ type: '*/*', limit: '50mb' }));
 
 // ==========================================
-// ⭐ INJECT_CODE（画像処理を修正）
+// ⭐ INJECT_CODE（processImages を修正）
 // ==========================================
 const INJECT_CODE = `
 <style>
@@ -153,26 +157,47 @@ const INJECT_CODE = `
   (function() {
     window.open = () => null;
 
-    // ⭐ 修正された画像処理関数（相対パスを絶対URLに変換）
+    // ⭐ 修正された画像処理関数（data-src 対応、スペースエンコード）
     const processImages = () => {
-      document.querySelectorAll('img').forEach(img => {
-        const src = img.dataset.src || img.getAttribute('src');
-        if (src && !src.startsWith('data:') && !src.includes('/_img_/?url=')) {
-          let absUrl;
-          if (src.startsWith('//')) {
-            absUrl = 'https:' + src;
-          } else if (src.startsWith('/')) {
-            absUrl = 'https://mangarw.com' + src;
-          } else if (src.startsWith('http://') || src.startsWith('https://')) {
-            absUrl = src;
+      console.log('[DEBUG] processImages called');
+      document.querySelectorAll('img').forEach((img, index) => {
+        // ⭐ data-src を優先（遅延読み込み対策）
+        let src = img.dataset.src || img.getAttribute('src');
+        console.log('[DEBUG] Image ' + index + ': src =', src);
+        
+        if (!src) return;
+        if (src.startsWith('data:')) {
+          // data-src があればそれを使う
+          if (img.dataset.src && !img.dataset.src.startsWith('data:')) {
+            src = img.dataset.src;
+            console.log('[DEBUG] Image ' + index + ': using data-src =', src);
           } else {
-            absUrl = 'https://mangarw.com/' + src;
+            return;
           }
-          const proxyUrl = '/_img_/?url=' + encodeURIComponent(absUrl);
-          img.setAttribute('src', proxyUrl);
-          img.setAttribute('data-src', proxyUrl);
-          img.removeAttribute('loading');
         }
+        if (src.includes('/_img_/?url=')) return;
+        
+        // ⭐ URLをエンコード（スペースなどを処理）
+        let absUrl;
+        if (src.startsWith('https://') || src.startsWith('http://')) {
+          absUrl = src;
+        } else if (src.startsWith('//')) {
+          absUrl = 'https:' + src;
+        } else if (src.startsWith('/')) {
+          absUrl = 'https://mangarw.com' + src;
+        } else {
+          absUrl = 'https://mangarw.com/' + src;
+        }
+        
+        // ⭐ スペースをエンコード
+        absUrl = absUrl.replace(/ /g, '%20');
+        
+        const proxyUrl = '/_img_/?url=' + encodeURIComponent(absUrl);
+        console.log('[DEBUG] Image ' + index + ': proxyUrl =', proxyUrl);
+        
+        img.setAttribute('src', proxyUrl);
+        img.dataset.src = proxyUrl;
+        img.removeAttribute('loading');
       });
     };
 
@@ -191,7 +216,7 @@ const INJECT_CODE = `
           if (entry.isIntersecting) {
             const imgs = Array.from(document.querySelectorAll('img'));
             const idx = imgs.indexOf(entry.target);
-            for(let i=1; i<=5; i++) {
+            for(var i=1; i<=5; i++) {
               if (imgs[idx+i] && imgs[idx+i].dataset.src && imgs[idx+i].src !== imgs[idx+i].dataset.src) {
                 imgs[idx+i].src = imgs[idx+i].dataset.src;
               }
@@ -199,13 +224,13 @@ const INJECT_CODE = `
           }
         });
       }, { rootMargin: '1500px 0px' });
-      document.querySelectorAll('img').forEach(i => { if(i.dataset.src) obs.observe(i); });
+      document.querySelectorAll('img').forEach(function(i) { if(i.dataset.src) obs.observe(i); });
       new MutationObserver(processImages).observe(document.body, { childList: true, subtree: true });
     };
     document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', initAll) : initAll();
     
     window.addEventListener('click', function(e) {
-      const target = e.target.closest('a');
+      var target = e.target.closest('a');
       if (target && target.href && (target.href.includes('adex') || target.href.includes('university'))) {
         e.preventDefault(); e.stopImmediatePropagation(); return false;
       }
@@ -342,7 +367,7 @@ app.all('*', async (req, res) => {
         }
 
         // ==========================================
-        // ⭐ HTML処理（zstd をブラウザに任せる版）
+        // ⭐ HTML処理
         // ==========================================
         if (contentType.includes("text/html")) {
             const buffer = await response.buffer();
