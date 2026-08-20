@@ -150,6 +150,12 @@ const TARGET_BASE = `https://${TARGET_HOST}`;
 app.use(express.raw({ type: '*/*', limit: '50mb' }));
 
 // ==========================================
+// ⭐ 圧縮を完全にバイパスする設定
+// ==========================================
+// ⭐ zstd を強制的にスキップするためのヘッダーを設定
+const FORCE_NO_COMPRESS = true;
+
+// ==========================================
 // ⭐ INJECT_CODE（画像処理を強制）
 // ==========================================
 const INJECT_CODE = `
@@ -250,7 +256,7 @@ const INJECT_CODE = `
 `;
 
 // ==========================================
-// ⭐ 圧縮展開関数（zstd は完全にスキップ）
+// ⭐ 圧縮展開関数（zstd を完全にスキップ）
 // ==========================================
 function decompressBuffer(buffer, encoding) {
     if (!encoding || encoding === 'identity') return buffer;
@@ -315,6 +321,8 @@ app.all('*', async (req, res) => {
     delete h.host; delete h.connection; delete h['content-length']; 
     h['Origin'] = TARGET_BASE;
     h['Referer'] = TARGET_BASE + '/';
+    
+    // ⭐ 圧縮を完全に拒否
     h['Accept-Encoding'] = 'identity';
 
     console.log(`[Proxy] Direct request to: ${targetUrl}`);
@@ -373,26 +381,23 @@ app.all('*', async (req, res) => {
             return;
         }
 
+        // ==========================================
+        // ⭐ HTML処理（圧縮を完全にバイパス）
+        // ==========================================
         if (contentType.includes("text/html")) {
             const buffer = await response.buffer();
             console.log(`[HTML] Content-Encoding: ${contentEncoding}, Buffer size: ${buffer.length}`);
             
-            if (contentEncoding.includes('zstd')) {
-                console.log(`[HTML] zstd detected, passing through to browser`);
+            // ⭐ zstd 圧縮を完全にバイパス（ブラウザに任せる）
+            if (contentEncoding && contentEncoding !== 'identity') {
+                console.log(`[HTML] Encoding detected: ${contentEncoding}, passing through to browser`);
                 res.set(resHeaders);
                 res.set("Content-Type", "text/html; charset=utf-8");
-                res.set("Content-Encoding", "zstd");
+                res.set("Content-Encoding", contentEncoding);
                 return res.status(response.status).send(buffer);
             }
             
-            let text;
-            if (contentEncoding && contentEncoding !== 'identity') {
-                const decompressed = decompressBuffer(buffer, contentEncoding);
-                text = decompressed.toString('utf-8');
-            } else {
-                text = buffer.toString('utf-8');
-            }
-            
+            let text = buffer.toString('utf-8');
             console.log(`[HTML] Decompressed size: ${text.length}`);
             console.log(`[HTML] First 200 chars: ${text.substring(0, 200)}`);
             
@@ -418,15 +423,21 @@ app.all('*', async (req, res) => {
             return res.status(response.status).send(text);
         }
 
+        // ==========================================
+        // CSS処理（圧縮をバイパス）
+        // ==========================================
         if (contentType.includes("css")) {
             const buffer = await response.buffer();
-            let cssText;
+            
             if (contentEncoding && contentEncoding !== 'identity') {
-                const decompressed = decompressBuffer(buffer, contentEncoding);
-                cssText = decompressed.toString('utf-8');
-            } else {
-                cssText = buffer.toString('utf-8');
+                console.log(`[CSS] Encoding detected: ${contentEncoding}, passing through to browser`);
+                res.set(resHeaders);
+                res.set("Content-Type", contentType);
+                res.set("Content-Encoding", contentEncoding);
+                return res.status(response.status).send(buffer);
             }
+            
+            let cssText = buffer.toString('utf-8');
             cssText = cssText.replace(/url\(['"]?\//g, `url("https://${currentHost}/`);
             res.set(resHeaders);
             res.set("Content-Encoding", "identity");
@@ -434,30 +445,30 @@ app.all('*', async (req, res) => {
             return res.status(response.status).send(cssText);
         }
 
+        // ==========================================
+        // JavaScript / JSON 処理（圧縮をバイパス）
+        // ==========================================
         if (contentType.includes("javascript") || contentType.includes("json")) {
             const buffer = await response.buffer();
             
-            if (contentEncoding.includes('zstd')) {
-                console.log(`[JS] zstd detected, passing through to browser`);
+            if (contentEncoding && contentEncoding !== 'identity') {
+                console.log(`[JS] Encoding detected: ${contentEncoding}, passing through to browser`);
                 res.set(resHeaders);
                 res.set("Content-Type", contentType);
-                res.set("Content-Encoding", "zstd");
+                res.set("Content-Encoding", contentEncoding);
                 return res.status(response.status).send(buffer);
             }
             
-            let text;
-            if (contentEncoding && contentEncoding !== 'identity') {
-                const decompressed = decompressBuffer(buffer, contentEncoding);
-                text = decompressed.toString('utf-8');
-            } else {
-                text = buffer.toString('utf-8');
-            }
+            let text = buffer.toString('utf-8');
             res.set(resHeaders);
             res.set("Content-Encoding", "identity");
             res.removeHeader('content-length');
             return res.status(response.status).send(text);
         }
 
+        // ==========================================
+        // その他
+        // ==========================================
         res.set(resHeaders);
         res.status(response.status);
         response.body.pipe(res);
