@@ -431,14 +431,14 @@ app.all('*', async (req, res) => {
         }
 
         // ==========================================
-        // ⭐ JavaScript / JSON 処理（zstd 対応版）
+        // ⭐ JavaScript / JSON 処理（zstd 解凍対応版）
         // ==========================================
         if (contentType.includes("javascript") || contentType.includes("json")) {
             const buffer = await response.buffer();
             
-            // ⭐ zstd の場合はそのままブラウザに送信
+            // ⭐ zstd の場合はそのままブラウザに送信（Edge/Chrome が解凍）
             if (contentEncoding.includes('zstd')) {
-                console.log(`[JS] zstd detected, passing through to browser`);
+                console.log(`[JS] zstd detected, passing through to browser (Edge/Chrome will decompress)`);
                 res.set(resHeaders);
                 res.set("Content-Type", contentType);
                 res.set("Content-Encoding", "zstd");
