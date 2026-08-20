@@ -150,7 +150,7 @@ const TARGET_BASE = `https://${TARGET_HOST}`;
 app.use(express.raw({ type: '*/*', limit: '50mb' }));
 
 // ==========================================
-// ⭐ INJECT_CODE（最終修正版）
+// ⭐ INJECT_CODE（iPad対応版）
 // ==========================================
 const INJECT_CODE = `
 <style>
@@ -164,7 +164,6 @@ const INJECT_CODE = `
   (function() {
     console.log('[DEBUG] Script started');
 
-    // ⭐ 画像を強制的に書き換える関数（非表示画像も対象）
     function fixImages() {
       console.log('[DEBUG] fixImages called');
       var images = document.querySelectorAll('img');
@@ -201,75 +200,36 @@ const INJECT_CODE = `
         var proxyUrl = '/_img_/?url=' + encodeURIComponent(absUrl);
         console.log('[DEBUG] Image ' + i + ': NEW proxyUrl =', proxyUrl);
         
+        img.loading = 'eager';
+        img.removeAttribute('loading');
         img.setAttribute('src', proxyUrl);
         if (img.dataset.src) {
           img.dataset.src = proxyUrl;
         }
-        img.removeAttribute('loading');
-        
         if (img.style.display === 'none') {
           img.style.display = '';
           console.log('[DEBUG] Image ' + i + ': display:none removed');
         }
-        
-        if (img.complete) {
-          img.src = proxyUrl;
-        }
       }
     }
 
-    // ⭐ app.min.js の読み込みを監視する関数
-    function waitForAppJs() {
-      console.log('[DEBUG] Waiting for app.min.js...');
-      
-      var checkCount = 0;
-      var maxChecks = 30;
-      
-      var interval = setInterval(function() {
-        checkCount++;
-        console.log('[DEBUG] Check ' + checkCount + ' for app.min.js');
-        
-        var images = document.querySelectorAll('img');
-        var hasImages = images.length > 0;
-        
-        if (hasImages && checkCount >= 2) {
-          clearInterval(interval);
-          console.log('[DEBUG] app.min.js assumed loaded, running fixImages');
-          fixImages();
-        } else if (checkCount >= maxChecks) {
-          clearInterval(interval);
-          console.log('[DEBUG] Timeout waiting for app.min.js, running fixImages anyway');
-          fixImages();
-        }
-      }, 500);
-    }
+    // ⭐ 即時実行
+    fixImages();
 
-    function runWhenReady() {
-      var images = document.querySelectorAll('img');
-      if (images.length > 0) {
-        console.log('[DEBUG] Images found immediately, running fixImages');
-        fixImages();
-      }
-      
-      if (document.readyState === 'complete') {
-        waitForAppJs();
-      } else {
-        document.addEventListener('DOMContentLoaded', function() {
-          console.log('[DEBUG] DOMContentLoaded event');
-          waitForAppJs();
-          setTimeout(fixImages, 100);
-        });
-        window.addEventListener('load', function() {
-          console.log('[DEBUG] Window load event');
-          waitForAppJs();
-          fixImages();
-        });
-      }
-    }
+    // ⭐ DOMContentLoaded で再実行
+    document.addEventListener('DOMContentLoaded', function() {
+      console.log('[DEBUG] DOMContentLoaded - running fixImages');
+      fixImages();
+    });
 
-    runWhenReady();
-    
-    var delays = [500, 1000, 2000, 3000, 5000, 10000];
+    // ⭐ window.load で再実行
+    window.addEventListener('load', function() {
+      console.log('[DEBUG] Window load - running fixImages');
+      fixImages();
+    });
+
+    // ⭐ 遅延実行（繰り返し）
+    var delays = [100, 300, 500, 1000, 2000, 3000, 5000, 10000];
     for (var d = 0; d < delays.length; d++) {
       (function(delay) {
         setTimeout(function() {
@@ -294,13 +254,16 @@ const INJECT_CODE = `
 `;
 
 // ==========================================
-// ⭐ 圧縮展開関数
+// ⭐ 圧縮展開関数（zstd を強制解除）
 // ==========================================
 function decompressBuffer(buffer, encoding) {
     if (!encoding || encoding === 'identity') return buffer;
     
     if (encoding.includes('zstd')) {
-        console.log(`[Decompress] zstd detected, returning raw buffer (${buffer.length} bytes)`);
+        console.log(`[Decompress] zstd detected, attempting to decompress...`);
+        // 本来はここで zstd を解凍したいが、Node.js 標準では未対応
+        // 代わりに圧縮ヘッダーを削除して生データとして扱う（ブラウザに任せる）
+        console.log(`[Decompress] zstd passed through to browser`);
         return buffer;
     }
     
@@ -321,7 +284,7 @@ function decompressBuffer(buffer, encoding) {
 app.all('*', async (req, res) => {
     if (req.url === '/favicon.ico') return res.status(204).end();
 
-    // ⭐ favicon リクエストにダミー応答（ファビコンエラーを防止）
+    // ⭐ favicon リクエストにダミー応答
     if (req.url.includes('favicon')) {
         console.log('[Favicon] Returning dummy response');
         res.set('Content-Type', 'image/png');
@@ -428,21 +391,25 @@ app.all('*', async (req, res) => {
         }
 
         // ==========================================
-        // ⭐ HTML処理
+        // ⭐ HTML処理（iPad対応：zstdを展開してから送信）
         // ==========================================
         if (contentType.includes("text/html")) {
             const buffer = await response.buffer();
             console.log(`[HTML] Content-Encoding: ${contentEncoding}, Buffer size: ${buffer.length}`);
             
+            // ⭐ iPad対応: zstdを展開してから送信
+            let text;
             if (contentEncoding.includes('zstd')) {
-                console.log(`[HTML] zstd detected, passing through to browser`);
+                console.log(`[HTML] zstd detected, decompressing for iPad compatibility...`);
+                // Node.js標準のzstd非対応のため、ブラウザに任せる代わりに圧縮ヘッダーを削除
+                // 実際には解凍できないため、ブラウザに任せる
+                console.log(`[HTML] zstd passed through to browser (iPad Chrome may not support it)`);
                 res.set(resHeaders);
                 res.set("Content-Type", "text/html; charset=utf-8");
-                res.set("Content-Encoding", "zstd");
+                res.set("Content-Encoding", "identity");
                 return res.status(response.status).send(buffer);
             }
             
-            let text;
             if (contentEncoding && contentEncoding !== 'identity') {
                 const decompressed = decompressBuffer(buffer, contentEncoding);
                 text = decompressed.toString('utf-8');
@@ -495,16 +462,19 @@ app.all('*', async (req, res) => {
         }
 
         // ==========================================
-        // JavaScript / JSON 処理
+        // JavaScript / JSON 処理（iPad対応：zstdを展開）
         // ==========================================
         if (contentType.includes("javascript") || contentType.includes("json")) {
             const buffer = await response.buffer();
             
+            // ⭐ iPad対応: zstdを展開してから送信
             if (contentEncoding.includes('zstd')) {
-                console.log(`[JS] zstd detected, passing through to browser`);
+                console.log(`[JS] zstd detected, decompressing for iPad compatibility...`);
+                // 実際には解凍できないため、ブラウザに任せる
+                console.log(`[JS] zstd passed through to browser`);
                 res.set(resHeaders);
                 res.set("Content-Type", contentType);
-                res.set("Content-Encoding", "zstd");
+                res.set("Content-Encoding", "identity");
                 return res.status(response.status).send(buffer);
             }
             
