@@ -48,7 +48,7 @@ app.use((req, res, next) => {
 });
 
 // ==========================================
-// 3. 画像プロキシ（修正版）
+// 3. 画像プロキシ（デバッグ強化版）
 // ==========================================
 const proxyAgent = new https.Agent({ keepAlive: true, maxSockets: 512, timeout: 60000 });
 
@@ -64,7 +64,7 @@ app.get('/_img_/', async (req, res) => {
         return res.status(400).send('Missing url parameter');
     }
 
-    console.log(`[Image] Requesting: ${imgUrl}`);
+    console.log(`[Image] Raw URL parameter: ${imgUrl}`);
 
     let decodedUrl = imgUrl;
     try {
@@ -74,8 +74,7 @@ app.get('/_img_/', async (req, res) => {
         console.log(`[Image] Decode failed, using original: ${imgUrl}`);
     }
 
-    let finalUrl = decodedUrl.replace(/ /g, '%20');
-    
+    let finalUrl = decodedUrl;
     if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
         if (finalUrl.startsWith('//')) {
             finalUrl = 'https:' + finalUrl;
@@ -85,8 +84,25 @@ app.get('/_img_/', async (req, res) => {
             finalUrl = 'https://mangarw.com/' + finalUrl;
         }
     }
-
+    
+    finalUrl = finalUrl.replace(/ /g, '%20');
     console.log(`[Image] Final URL: ${finalUrl}`);
+
+    // ⭐ HEADリクエストで事前確認
+    try {
+        const headRes = await fetch(finalUrl, {
+            method: 'HEAD',
+            headers: {
+                'User-Agent': 'Mozilla/5.0',
+                'Accept-Encoding': 'identity'
+            },
+            timeout: 5000
+        });
+        console.log(`[Image] HEAD status: ${headRes.status}`);
+        console.log(`[Image] HEAD content-type: ${headRes.headers.get('content-type')}`);
+    } catch (e) {
+        console.log(`[Image] HEAD failed: ${e.message}`);
+    }
 
     const fetchOptions = {
         headers: {
@@ -107,13 +123,14 @@ app.get('/_img_/', async (req, res) => {
         const imgRes = await fetch(finalUrl, fetchOptions);
 
         const contentType = imgRes.headers.get('content-type') || '';
+        console.log(`[Image] Response status: ${imgRes.status}`);
+        console.log(`[Image] Response content-type: ${contentType}`);
         
-        // ⭐ レスポンスが画像でない場合の処理
         if (!contentType.startsWith('image/')) {
-            console.log(`[Image] Warning: Response is not an image (${contentType})`);
+            console.log(`[Image] Warning: Not an image! Content-Type: ${contentType}`);
             const text = await imgRes.text();
-            console.log(`[Image] Response text: ${text.substring(0, 200)}`);
-            return res.status(502).send('Invalid image response');
+            console.log(`[Image] Response body (first 200 chars): ${text.substring(0, 200)}`);
+            return res.status(502).send(`Not an image: ${contentType}`);
         }
 
         if (!imgRes.ok) {
