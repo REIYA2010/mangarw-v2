@@ -185,31 +185,32 @@ function decompressBuffer(buffer, encoding) {
 app.all('*', async (req, res) => {
     if (req.url === '/favicon.ico') return res.status(204).end();
 
-    // ⭐ あなたの専用プロキシURLを使用
-    const targetUrl = `https://web-production-528aa.up.railway.app/${TARGET_BASE}${req.url}`;
+    // ⭐ 直接 mangarw.com から取得（プロキシを経由しない）
+    const targetUrl = TARGET_BASE + req.url;
     const currentHost = req.get('host');
 
     const h = { ...req.headers };
     delete h.host; delete h.connection; delete h['content-length']; 
     h['Origin'] = TARGET_BASE;
     h['Referer'] = TARGET_BASE + '/';
+    
+    // ⭐ 圧縮を完全に拒否（identity を指定）
     h['Accept-Encoding'] = 'identity';
 
-    console.log(`[Proxy] Requesting: ${targetUrl}`);
+    console.log(`[Proxy] Direct request to: ${targetUrl}`);
 
     try {
         const response = await fetch(targetUrl, {
             method: req.method,
             headers: h,
             agent: proxyAgent,
-            redirect: 'follow', // ⭐ manual → follow に変更（リダイレクトを自動追跡）
+            redirect: 'manual',
             body: (req.method !== 'GET' && req.method !== 'HEAD') ? req.body : undefined,
             timeout: 30000,
             compress: false
         });
 
         console.log(`[Proxy] Response status: ${response.status}`);
-        console.log(`[Proxy] Final URL: ${response.url}`); // デバッグ用
 
         let resHeaders = {};
         response.headers.forEach((v, k) => {
