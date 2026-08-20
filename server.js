@@ -185,15 +185,14 @@ function decompressBuffer(buffer, encoding) {
 app.all('*', async (req, res) => {
     if (req.url === '/favicon.ico') return res.status(204).end();
 
-    const targetUrl = TARGET_BASE + req.url;
+    // ⭐ CORSプロキシ経由で取得（Cloudflareの圧縮をバイパス）
+    const targetUrl = `https://corsproxy.io/?url=${encodeURIComponent(TARGET_BASE + req.url)}`;
     const currentHost = req.get('host');
 
     const h = { ...req.headers };
     delete h.host; delete h.connection; delete h['content-length']; 
     h['Origin'] = TARGET_BASE;
     h['Referer'] = TARGET_BASE + '/';
-    
-    // ⭐ 圧縮なしを明示的に要求
     h['Accept-Encoding'] = 'identity';
 
     try {
@@ -203,7 +202,8 @@ app.all('*', async (req, res) => {
             agent: proxyAgent,
             redirect: 'manual',
             body: (req.method !== 'GET' && req.method !== 'HEAD') ? req.body : undefined,
-            timeout: 15000
+            timeout: 30000,
+            compress: false // ⭐ 圧縮を完全に無効化
         });
 
         let resHeaders = {};
@@ -251,20 +251,19 @@ app.all('*', async (req, res) => {
         }
 
         // ==========================================
-        // ⭐ HTML処理（identity版）
+        // ⭐ HTML処理
         // ==========================================
         if (contentType.includes("text/html")) {
             const buffer = await response.buffer();
             console.log(`[HTML] Content-Encoding: ${contentEncoding}, Buffer size: ${buffer.length}`);
             
-            // ⭐ identity の場合はそのまま文字列化
+            // 圧縮を展開または直接文字列化
             let text;
-            if (contentEncoding === 'identity' || !contentEncoding) {
-                text = buffer.toString('utf-8');
-                console.log(`[HTML] identity: direct UTF-8 conversion`);
-            } else {
+            if (contentEncoding && contentEncoding !== 'identity') {
                 const decompressed = decompressBuffer(buffer, contentEncoding);
                 text = decompressed.toString('utf-8');
+            } else {
+                text = buffer.toString('utf-8');
             }
             
             console.log(`[HTML] Decompressed size: ${text.length}`);
@@ -299,11 +298,11 @@ app.all('*', async (req, res) => {
         if (contentType.includes("css")) {
             const buffer = await response.buffer();
             let cssText;
-            if (contentEncoding === 'identity' || !contentEncoding) {
-                cssText = buffer.toString('utf-8');
-            } else {
+            if (contentEncoding && contentEncoding !== 'identity') {
                 const decompressed = decompressBuffer(buffer, contentEncoding);
                 cssText = decompressed.toString('utf-8');
+            } else {
+                cssText = buffer.toString('utf-8');
             }
             cssText = cssText.replace(/url\(['"]?\//g, `url("https://${currentHost}/`);
             res.set(resHeaders);
@@ -318,11 +317,11 @@ app.all('*', async (req, res) => {
         if (contentType.includes("javascript") || contentType.includes("json")) {
             const buffer = await response.buffer();
             let text;
-            if (contentEncoding === 'identity' || !contentEncoding) {
-                text = buffer.toString('utf-8');
-            } else {
+            if (contentEncoding && contentEncoding !== 'identity') {
                 const decompressed = decompressBuffer(buffer, contentEncoding);
                 text = decompressed.toString('utf-8');
+            } else {
+                text = buffer.toString('utf-8');
             }
             res.set(resHeaders);
             res.set("Content-Encoding", "identity");
