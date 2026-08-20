@@ -168,16 +168,15 @@ const INJECT_CODE = `
     var images = document.querySelectorAll('img');
     console.log('[DEBUG] Found ' + images.length + ' images');
     
+    var changed = 0;
     for (var i = 0; i < images.length; i++) {
       var img = images[i];
       var src = img.dataset.src || img.getAttribute('src');
-      console.log('[DEBUG] Image ' + i + ': src =', src);
       
       if (!src) continue;
       if (src.indexOf('data:') === 0) {
         if (img.dataset.src && img.dataset.src.indexOf('data:') !== 0) {
           src = img.dataset.src;
-          console.log('[DEBUG] Image ' + i + ': using data-src =', src);
         } else {
           continue;
         }
@@ -194,11 +193,12 @@ const INJECT_CODE = `
       }
       img.loading = 'eager';
       img.removeAttribute('loading');
+      changed++;
     }
+    console.log('[DEBUG] Changed ' + changed + ' images');
   }
 
-  fixImages();
-
+  setTimeout(fixImages, 0);
   setTimeout(fixImages, 100);
   setTimeout(fixImages, 300);
   setTimeout(fixImages, 500);
