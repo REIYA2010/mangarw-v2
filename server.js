@@ -150,7 +150,7 @@ const TARGET_BASE = `https://${TARGET_HOST}`;
 app.use(express.raw({ type: '*/*', limit: '50mb' }));
 
 // ==========================================
-// ⭐ INJECT_CODE（完全修正版）
+// ⭐ INJECT_CODE（最終修正版）
 // ==========================================
 const INJECT_CODE = `
 <style>
@@ -201,49 +201,84 @@ const INJECT_CODE = `
         var proxyUrl = '/_img_/?url=' + encodeURIComponent(absUrl);
         console.log('[DEBUG] Image ' + i + ': NEW proxyUrl =', proxyUrl);
         
-        // ⭐ 強制的にsrcを書き換え
         img.setAttribute('src', proxyUrl);
         if (img.dataset.src) {
           img.dataset.src = proxyUrl;
         }
         img.removeAttribute('loading');
         
-        // ⭐ display:none を解除して表示させる
         if (img.style.display === 'none') {
           img.style.display = '';
           console.log('[DEBUG] Image ' + i + ': display:none removed');
         }
         
-        // ⭐ 画像の再読み込みを強制
         if (img.complete) {
           img.src = proxyUrl;
         }
       }
     }
 
-    // ⭐ 即時実行
-    fixImages();
-
-    // ⭐ 遅延実行（DOM読み込み後）
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', function() {
-        console.log('[DEBUG] DOMContentLoaded - running fixImages');
-        fixImages();
-      });
+    // ⭐ app.min.js の読み込みを監視する関数
+    function waitForAppJs() {
+      console.log('[DEBUG] Waiting for app.min.js...');
+      
+      var checkCount = 0;
+      var maxChecks = 30;
+      
+      var interval = setInterval(function() {
+        checkCount++;
+        console.log('[DEBUG] Check ' + checkCount + ' for app.min.js');
+        
+        var images = document.querySelectorAll('img');
+        var hasImages = images.length > 0;
+        
+        if (hasImages && checkCount >= 2) {
+          clearInterval(interval);
+          console.log('[DEBUG] app.min.js assumed loaded, running fixImages');
+          fixImages();
+        } else if (checkCount >= maxChecks) {
+          clearInterval(interval);
+          console.log('[DEBUG] Timeout waiting for app.min.js, running fixImages anyway');
+          fixImages();
+        }
+      }, 500);
     }
+
+    function runWhenReady() {
+      var images = document.querySelectorAll('img');
+      if (images.length > 0) {
+        console.log('[DEBUG] Images found immediately, running fixImages');
+        fixImages();
+      }
+      
+      if (document.readyState === 'complete') {
+        waitForAppJs();
+      } else {
+        document.addEventListener('DOMContentLoaded', function() {
+          console.log('[DEBUG] DOMContentLoaded event');
+          waitForAppJs();
+          setTimeout(fixImages, 100);
+        });
+        window.addEventListener('load', function() {
+          console.log('[DEBUG] Window load event');
+          waitForAppJs();
+          fixImages();
+        });
+      }
+    }
+
+    runWhenReady();
     
-    window.addEventListener('load', function() {
-      console.log('[DEBUG] Window load - running fixImages');
-      fixImages();
-    });
+    var delays = [500, 1000, 2000, 3000, 5000, 10000];
+    for (var d = 0; d < delays.length; d++) {
+      (function(delay) {
+        setTimeout(function() {
+          console.log('[DEBUG] Delayed fixImages (' + delay + 'ms)');
+          fixImages();
+        }, delay);
+      })(delays[d]);
+    }
 
-    // ⭐ 定期的に実行（画像が動的に追加される場合）
-    setInterval(function() {
-      console.log('[DEBUG] Periodic fixImages');
-      fixImages();
-    }, 2000);
-
-    // ⭐ MutationObserver
     var observer = new MutationObserver(function() {
       fixImages();
     });
