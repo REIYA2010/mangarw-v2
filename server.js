@@ -396,7 +396,6 @@ app.all('*', async (req, res) => {
             const buffer = await response.buffer();
             console.log(`[HTML] Content-Encoding: ${contentEncoding}, Buffer size: ${buffer.length}`);
             
-            // ⭐ zstd をサーバーで解凍
             const decompressed = decompressBuffer(buffer, contentEncoding);
             let text = decompressed.toString('utf-8');
             
