@@ -207,6 +207,28 @@ app.all('*', async (req, res) => {
 
         const contentType = response.headers.get("content-type") || "";
 
+        // ==========================================
+        // ⭐ 画像・バイナリは最優先で処理（文字化け防止）
+        // ==========================================
+        const isBinary = 
+            contentType.startsWith("image/") ||
+            contentType.startsWith("video/") ||
+            contentType.startsWith("audio/") ||
+            contentType.startsWith("font/") ||
+            contentType.startsWith("application/octet-stream") ||
+            contentType.includes("pdf") ||
+            contentType.includes("zip");
+
+        if (isBinary) {
+            res.set(resHeaders);
+            res.status(response.status);
+            response.body.pipe(res);
+            return; // ここで終了！
+        }
+
+        // ==========================================
+        // HTML処理
+        // ==========================================
         if (contentType.includes("text/html")) {
             let text = await response.text();
             
@@ -229,6 +251,9 @@ app.all('*', async (req, res) => {
             return res.status(response.status).send(text);
         }
 
+        // ==========================================
+        // CSS処理
+        // ==========================================
         if (contentType.includes("css")) {
             let cssText = await response.text();
             cssText = cssText.replace(/url\(['"]?\//g, `url("https://${currentHost}/`);
@@ -236,6 +261,18 @@ app.all('*', async (req, res) => {
             return res.status(response.status).send(cssText);
         }
 
+        // ==========================================
+        // JavaScript / JSON 処理
+        // ==========================================
+        if (contentType.includes("javascript") || contentType.includes("json")) {
+            const text = await response.text();
+            res.set(resHeaders);
+            return res.status(response.status).send(text);
+        }
+
+        // ==========================================
+        // その他（フォールバック）
+        // ==========================================
         res.set(resHeaders);
         res.status(response.status);
         response.body.pipe(res);
