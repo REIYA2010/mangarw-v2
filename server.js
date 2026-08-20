@@ -48,7 +48,7 @@ app.use((req, res, next) => {
 });
 
 // ==========================================
-// 3. 画像プロキシ（修正版）
+// 3. 画像プロキシ
 // ==========================================
 const proxyAgent = new https.Agent({ keepAlive: true, maxSockets: 512, timeout: 60000 });
 
@@ -149,6 +149,9 @@ const TARGET_BASE = `https://${TARGET_HOST}`;
 
 app.use(express.raw({ type: '*/*', limit: '50mb' }));
 
+// ==========================================
+// ⭐ INJECT_CODE（画像処理を強制）
+// ==========================================
 const INJECT_CODE = `
 <style>
   iframe, .pop--excl, .bg-ssp-11557, [id*="bg-ssp"], [class*="ad-"], #toast,
@@ -156,82 +159,79 @@ const INJECT_CODE = `
   a[href*="adexchangerapid"], a[href*="university"] { display: none !important; pointer-events: none !important; }
   #load-more-chapters, .load-more, .read-more { display: block !important; visibility: visible !important; opacity: 1 !important; background: #3b82f6 !important; color: white !important; border-radius: 8px; padding: 15px !important; text-align: center; cursor: pointer; }
 </style>
+
 <script>
   (function() {
+    console.log('[DEBUG] Script started');
     window.open = () => null;
 
-    const processImages = () => {
-      console.log('[DEBUG] processImages called');
-      document.querySelectorAll('img').forEach((img, index) => {
-        let src = img.dataset.src || img.getAttribute('src');
-        console.log('[DEBUG] Image ' + index + ': src =', src);
+    // ⭐ 画像を直接書き換える関数
+    function fixImages() {
+      console.log('[DEBUG] fixImages called');
+      var images = document.querySelectorAll('img');
+      console.log('[DEBUG] Found ' + images.length + ' images');
+      
+      for (var i = 0; i < images.length; i++) {
+        var img = images[i];
+        var src = img.dataset.src || img.getAttribute('src');
         
-        if (!src) return;
-        if (src.startsWith('data:')) {
-          if (img.dataset.src && !img.dataset.src.startsWith('data:')) {
+        if (!src) continue;
+        if (src.indexOf('data:') === 0) {
+          if (img.dataset.src && img.dataset.src.indexOf('data:') !== 0) {
             src = img.dataset.src;
-            console.log('[DEBUG] Image ' + index + ': using data-src =', src);
           } else {
-            return;
+            continue;
           }
         }
-        if (src.includes('/_img_/?url=')) return;
+        if (src.indexOf('/_img_/?url=') !== -1) continue;
         
-        let absUrl;
-        if (src.startsWith('https://') || src.startsWith('http://')) {
+        var absUrl;
+        if (src.indexOf('https://') === 0 || src.indexOf('http://') === 0) {
           absUrl = src;
-        } else if (src.startsWith('//')) {
+        } else if (src.indexOf('//') === 0) {
           absUrl = 'https:' + src;
-        } else if (src.startsWith('/')) {
+        } else if (src.indexOf('/') === 0) {
           absUrl = 'https://mangarw.com' + src;
         } else {
           absUrl = 'https://mangarw.com/' + src;
         }
         
         absUrl = absUrl.replace(/ /g, '%20');
-        const proxyUrl = '/_img_/?url=' + encodeURIComponent(absUrl);
-        console.log('[DEBUG] Image ' + index + ': proxyUrl =', proxyUrl);
+        var proxyUrl = '/_img_/?url=' + encodeURIComponent(absUrl);
+        console.log('[DEBUG] Image ' + i + ': proxyUrl =', proxyUrl);
         
         img.setAttribute('src', proxyUrl);
-        img.dataset.src = proxyUrl;
+        if (img.dataset.src) {
+          img.dataset.src = proxyUrl;
+        }
         img.removeAttribute('loading');
-      });
-    };
-
-    const nukeOverlays = () => {
-      document.querySelectorAll('div, a, section, ins').forEach(el => {
-        const s = window.getComputedStyle(el);
-        if (parseInt(s.zIndex) > 1000 && parseFloat(s.opacity) < 0.1 && !el.innerText.trim()) el.remove();
-      });
-    };
-    setInterval(nukeOverlays, 1000);
-
-    const initAll = () => {
-      processImages();
-      const obs = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-          if (entry.isIntersecting) {
-            const imgs = Array.from(document.querySelectorAll('img'));
-            const idx = imgs.indexOf(entry.target);
-            for(var i=1; i<=5; i++) {
-              if (imgs[idx+i] && imgs[idx+i].dataset.src && imgs[idx+i].src !== imgs[idx+i].dataset.src) {
-                imgs[idx+i].src = imgs[idx+i].dataset.src;
-              }
-            }
-          }
-        });
-      }, { rootMargin: '1500px 0px' });
-      document.querySelectorAll('img').forEach(function(i) { if(i.dataset.src) obs.observe(i); });
-      new MutationObserver(processImages).observe(document.body, { childList: true, subtree: true });
-    };
-    document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', initAll) : initAll();
-    
-    window.addEventListener('click', function(e) {
-      var target = e.target.closest('a');
-      if (target && target.href && (target.href.includes('adex') || target.href.includes('university'))) {
-        e.preventDefault(); e.stopImmediatePropagation(); return false;
       }
-    }, true); 
+    }
+
+    // ⭐ 即時実行と遅延実行を組み合わせる
+    if (document.readyState === 'complete') {
+      fixImages();
+    } else {
+      document.addEventListener('DOMContentLoaded', fixImages);
+      window.addEventListener('load', fixImages);
+    }
+    
+    // 500ms, 1000ms, 2000ms 後に再実行
+    setTimeout(fixImages, 500);
+    setTimeout(fixImages, 1000);
+    setTimeout(fixImages, 2000);
+
+    // MutationObserver で監視
+    var observer = new MutationObserver(function() {
+      fixImages();
+    });
+    try {
+      observer.observe(document.body, { childList: true, subtree: true });
+    } catch(e) {
+      console.log('[DEBUG] MutationObserver error:', e);
+    }
+
+    console.log('[DEBUG] Script initialized');
   })();
 </script>
 `;
@@ -431,14 +431,13 @@ app.all('*', async (req, res) => {
         }
 
         // ==========================================
-        // ⭐ JavaScript / JSON 処理（zstd 解凍対応版）
+        // JavaScript / JSON 処理
         // ==========================================
         if (contentType.includes("javascript") || contentType.includes("json")) {
             const buffer = await response.buffer();
             
-            // ⭐ zstd の場合はそのままブラウザに送信（Edge/Chrome が解凍）
             if (contentEncoding.includes('zstd')) {
-                console.log(`[JS] zstd detected, passing through to browser (Edge/Chrome will decompress)`);
+                console.log(`[JS] zstd detected, passing through to browser`);
                 res.set(resHeaders);
                 res.set("Content-Type", contentType);
                 res.set("Content-Encoding", "zstd");
