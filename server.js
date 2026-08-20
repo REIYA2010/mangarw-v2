@@ -52,11 +52,29 @@ app.use((req, res, next) => {
 // ==========================================
 const proxyAgent = new https.Agent({ keepAlive: true, maxSockets: 512, timeout: 60000 });
 
+// ⭐ /_img_ へのアクセスをリダイレクト
+app.get('/_img_', (req, res) => {
+    const query = req.query.url ? `?url=${encodeURIComponent(req.query.url)}` : '';
+    res.redirect(`/_img_/${query}`);
+});
+
 app.get('/_img_/', async (req, res) => {
     const imgUrl = req.query.url;
-    if (!imgUrl) return res.status(400).end();
+    if (!imgUrl) {
+        console.log('[Image] No URL provided');
+        return res.status(400).send('Missing url parameter');
+    }
 
     console.log(`[Image] Requesting: ${imgUrl}`);
+
+    // ⭐ URLのデコードを試みる
+    let decodedUrl = imgUrl;
+    try {
+        decodedUrl = decodeURIComponent(imgUrl);
+        console.log(`[Image] Decoded URL: ${decodedUrl}`);
+    } catch (e) {
+        console.log(`[Image] Decode failed, using original: ${imgUrl}`);
+    }
 
     const fetchOptions = {
         headers: {
@@ -67,10 +85,7 @@ app.get('/_img_/', async (req, res) => {
             'Referer': 'https://mangarw.com/',
             'Origin': 'https://mangarw.com/',
             'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache',
-            'Sec-Fetch-Dest': 'image',
-            'Sec-Fetch-Mode': 'no-cors',
-            'Sec-Fetch-Site': 'cross-site'
+            'Pragma': 'no-cache'
         },
         agent: proxyAgent,
         timeout: 30000,
@@ -79,41 +94,30 @@ app.get('/_img_/', async (req, res) => {
     };
 
     try {
-        const imgRes = await fetch(imgUrl, fetchOptions);
+        const imgRes = await fetch(decodedUrl, fetchOptions);
 
         if (!imgRes.ok) {
-            console.log(`[Image] Failed: ${imgUrl} -> ${imgRes.status}`);
-            
-            // ⭐ リトライ（1回）
-            console.log(`[Image] Retrying...`);
-            const retryRes = await fetch(imgUrl, fetchOptions);
-            if (!retryRes.ok) {
-                console.log(`[Image] Retry failed: ${retryRes.status}`);
-                return res.status(502).send('Image load failed');
-            }
-            
-            const contentType = retryRes.headers.get('content-type') || 'image/webp';
-            res.set('Access-Control-Allow-Origin', '*');
-            res.set('Cache-Control', 'public, max-age=3600');
-            res.set('Content-Type', contentType);
-            retryRes.body.pipe(res);
-            return;
+            console.log(`[Image] Failed: ${decodedUrl} -> ${imgRes.status}`);
+            return res.status(502).send(`Image load failed: ${imgRes.status}`);
         }
 
         const contentType = imgRes.headers.get('content-type') || 'image/webp';
+        console.log(`[Image] Success: ${decodedUrl} -> ${contentType}`);
+        
         res.set('Access-Control-Allow-Origin', '*');
-        res.set('Cache-Control', 'public, max-age=3600');
+        res.set('Cache-Control', 'public, max-age=86400, immutable');
         res.set('Content-Type', contentType);
         res.removeHeader('content-length');
         
         imgRes.body.pipe(res);
-        imgRes.body.on('error', () => {
+        imgRes.body.on('error', (err) => {
+            console.error(`[Image] Pipe error: ${err.message}`);
             if (!res.headersSent) res.status(502).end();
         });
 
     } catch (e) {
-        console.error(`[Image Error] ${e.message}`);
-        if (!res.headersSent) res.status(502).send('Image proxy error');
+        console.error(`[Image] Error: ${e.message}`);
+        if (!res.headersSent) res.status(502).send(`Image proxy error: ${e.message}`);
     }
 });
 
@@ -139,9 +143,11 @@ const INJECT_CODE = `
     const processImages = () => {
       document.querySelectorAll('img').forEach(img => {
         const src = img.dataset.src || img.getAttribute('src');
+        console.log('[DEBUG] Original src:', src);
         if (src && !src.startsWith('data:') && !src.includes('/_img_/?url=')) {
           const absUrl = src.startsWith('http') ? src : window.location.origin + (src.startsWith('/') ? src : '/' + src);
           const proxyUrl = '/_img_/?url=' + encodeURIComponent(absUrl);
+          console.log('[DEBUG] Proxy url:', proxyUrl);
           img.setAttribute('src', proxyUrl);
           img.setAttribute('data-src', proxyUrl);
           img.removeAttribute('loading'); 
