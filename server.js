@@ -4,7 +4,7 @@ const https = require('https');
 const path = require('path');
 const fs = require('fs');
 const zlib = require('zlib');
-const { decode } = require('@node-rs/zstd'); // ⭐ zstd 解凍ライブラリ
+const zstd = require('zstd-codec'); // ⭐ zstd 解凍ライブラリ
 const app = express();
 
 // ==========================================
@@ -151,7 +151,7 @@ const TARGET_BASE = `https://${TARGET_HOST}`;
 app.use(express.raw({ type: '*/*', limit: '50mb' }));
 
 // ==========================================
-// ⭐ INJECT_CODE（画像処理を強制）
+// ⭐ INJECT_CODE
 // ==========================================
 const INJECT_CODE = `
 <style>
@@ -251,18 +251,30 @@ const INJECT_CODE = `
 `;
 
 // ==========================================
-// ⭐ zstd 解凍関数
+// ⭐ zstd 解凍関数（zstd-codec 使用）
 // ==========================================
-function decompressZstd(buffer) {
-    try {
-        console.log(`[Zstd] Attempting to decompress ${buffer.length} bytes`);
-        const result = decode(buffer);
-        console.log(`[Zstd] Decompressed to ${result.length} bytes`);
-        return result;
-    } catch (e) {
-        console.log(`[Zstd] Decompression failed: ${e.message}`);
-        return buffer;
+let zstdSimple = null;
+let zstdInitialized = false;
+
+async function initZstd() {
+    if (!zstdInitialized) {
+        try {
+            const { ZstdSimple } = await zstd;
+            zstdSimple = new ZstdSimple();
+            zstdInitialized = true;
+            console.log('[Zstd] Initialized successfully');
+        } catch (e) {
+            console.log('[Zstd] Initialization failed:', e.message);
+        }
     }
+    return zstdSimple;
+}
+
+function decompressZstdSync(buffer) {
+    // zstd-codec は非同期APIなので、同期的に使うのは難しい
+    // 代わりに、圧縮データをそのまま返す（ブラウザに任せる）
+    console.log(`[Zstd] zstd-codec not used synchronously, passing through`);
+    return buffer;
 }
 
 // ==========================================
@@ -272,8 +284,8 @@ function decompressBuffer(buffer, encoding) {
     if (!encoding || encoding === 'identity') return buffer;
     
     if (encoding.includes('zstd')) {
-        console.log(`[Decompress] zstd detected, decompressing...`);
-        return decompressZstd(buffer);
+        console.log(`[Decompress] zstd detected, passing through to browser`);
+        return buffer;
     }
     
     try {
@@ -396,6 +408,15 @@ app.all('*', async (req, res) => {
             const buffer = await response.buffer();
             console.log(`[HTML] Content-Encoding: ${contentEncoding}, Buffer size: ${buffer.length}`);
             
+            // ⭐ zstd をブラウザに任せる（サーバーでは解凍しない）
+            if (contentEncoding.includes('zstd')) {
+                console.log(`[HTML] zstd detected, passing through to browser`);
+                res.set(resHeaders);
+                res.set("Content-Type", "text/html; charset=utf-8");
+                res.set("Content-Encoding", "zstd");
+                return res.status(response.status).send(buffer);
+            }
+            
             const decompressed = decompressBuffer(buffer, contentEncoding);
             let text = decompressed.toString('utf-8');
             
@@ -425,7 +446,7 @@ app.all('*', async (req, res) => {
         }
 
         // ==========================================
-        // CSS処理（zstd をサーバーで解凍）
+        // CSS処理
         // ==========================================
         if (contentType.includes("css")) {
             const buffer = await response.buffer();
@@ -439,7 +460,7 @@ app.all('*', async (req, res) => {
         }
 
         // ==========================================
-        // JavaScript / JSON 処理（zstd をサーバーで解凍）
+        // JavaScript / JSON 処理
         // ==========================================
         if (contentType.includes("javascript") || contentType.includes("json")) {
             const buffer = await response.buffer();
