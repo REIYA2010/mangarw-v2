@@ -48,7 +48,7 @@ app.use((req, res, next) => {
 });
 
 // ==========================================
-// 3. 画像プロキシ（修正版）
+// 3. 画像プロキシ
 // ==========================================
 const proxyAgent = new https.Agent({ keepAlive: true, maxSockets: 512, timeout: 60000 });
 
@@ -58,10 +58,9 @@ app.get('/_img_/', async (req, res) => {
 
     console.log(`[Image] Requesting: ${imgUrl}`);
 
-    // ⭐ 画像プロキシ専用のオプション
     const fetchOptions = {
         headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
             'Accept-Encoding': 'identity',
             'Referer': 'https://mangarw.com/',
@@ -73,7 +72,6 @@ app.get('/_img_/', async (req, res) => {
     };
 
     try {
-        // ⭐ 直接 mangarw.com から画像を取得
         const imgRes = await fetch(imgUrl, fetchOptions);
 
         if (!imgRes.ok) {
@@ -81,14 +79,12 @@ app.get('/_img_/', async (req, res) => {
             return res.status(502).send('Image load failed');
         }
 
-        // レスポンスヘッダーを設定
         const contentType = imgRes.headers.get('content-type') || 'image/webp';
         res.set('Access-Control-Allow-Origin', '*');
         res.set('Cache-Control', 'public, max-age=86400, immutable');
         res.set('Content-Type', contentType);
         res.removeHeader('content-length');
         
-        // 画像データを転送
         imgRes.body.pipe(res);
         imgRes.body.on('error', () => {
             if (!res.headersSent) res.status(502).end();
@@ -198,7 +194,37 @@ function decompressBuffer(buffer, encoding) {
 app.all('*', async (req, res) => {
     if (req.url === '/favicon.ico') return res.status(204).end();
 
-    // ⭐ 直接 mangarw.com から取得
+    // ==========================================
+    // ⭐ view-count リクエストを特別に処理（修正箇所）
+    // ==========================================
+    if (req.url.includes('/view-count')) {
+        const targetUrl = `https://mangarw.com${req.url}`;
+        console.log(`[Direct] Proxying view-count: ${targetUrl}`);
+        
+        try {
+            const response = await fetch(targetUrl, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': 'application/json, text/plain, */*',
+                    'Referer': 'https://mangarw.com/',
+                    'Origin': 'https://mangarw.com/'
+                },
+                timeout: 10000
+            });
+            
+            const data = await response.text();
+            res.set('Content-Type', 'application/json');
+            res.set('Access-Control-Allow-Origin', '*');
+            return res.status(response.status).send(data);
+        } catch (e) {
+            console.error(`[view-count Error] ${e.message}`);
+            return res.status(502).json({ error: 'view-count proxy error' });
+        }
+    }
+
+    // ==========================================
+    // ⭐ 通常のプロキシ処理
+    // ==========================================
     const targetUrl = TARGET_BASE + req.url;
     const currentHost = req.get('host');
 
