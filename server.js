@@ -185,8 +185,8 @@ function decompressBuffer(buffer, encoding) {
 app.all('*', async (req, res) => {
     if (req.url === '/favicon.ico') return res.status(204).end();
 
-    // ⭐ 完全なURLを渡す（https:// を含む）
-    const targetUrl = `https://cors-anywhere.herokuapp.com/${TARGET_BASE}${req.url}`;
+    // ⭐ あなたの専用プロキシURLを使用
+    const targetUrl = `https://web-production-528aa.up.railway.app/${TARGET_BASE}${req.url}`;
     const currentHost = req.get('host');
 
     const h = { ...req.headers };
@@ -195,7 +195,7 @@ app.all('*', async (req, res) => {
     h['Referer'] = TARGET_BASE + '/';
     h['Accept-Encoding'] = 'identity';
 
-    console.log(`[Proxy] Requesting: ${targetUrl}`); // デバッグ用
+    console.log(`[Proxy] Requesting: ${targetUrl}`);
 
     try {
         const response = await fetch(targetUrl, {
@@ -208,7 +208,7 @@ app.all('*', async (req, res) => {
             compress: false
         });
 
-        console.log(`[Proxy] Response status: ${response.status}`); // デバッグ用
+        console.log(`[Proxy] Response status: ${response.status}`);
 
         let resHeaders = {};
         response.headers.forEach((v, k) => {
