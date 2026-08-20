@@ -4,7 +4,6 @@ const https = require('https');
 const path = require('path');
 const fs = require('fs');
 const zlib = require('zlib');
-const zstd = require('zstd-codec'); // ⭐ zstd 解凍ライブラリ
 const app = express();
 
 // ==========================================
@@ -151,7 +150,7 @@ const TARGET_BASE = `https://${TARGET_HOST}`;
 app.use(express.raw({ type: '*/*', limit: '50mb' }));
 
 // ==========================================
-// ⭐ INJECT_CODE
+// ⭐ INJECT_CODE（修正版）
 // ==========================================
 const INJECT_CODE = `
 <style>
@@ -162,123 +161,85 @@ const INJECT_CODE = `
 </style>
 
 <script>
-  (function() {
-    console.log('[DEBUG] Script started');
+  console.log('[DEBUG] Script loaded');
 
-    function fixImages() {
-      console.log('[DEBUG] fixImages called');
-      var images = document.querySelectorAll('img');
-      console.log('[DEBUG] Found ' + images.length + ' images');
+  function fixImages() {
+    console.log('[DEBUG] fixImages called');
+    var images = document.querySelectorAll('img');
+    console.log('[DEBUG] Found ' + images.length + ' images');
+    
+    for (var i = 0; i < images.length; i++) {
+      var img = images[i];
+      var src = img.dataset.src || img.getAttribute('src');
+      console.log('[DEBUG] Image ' + i + ': src =', src);
       
-      for (var i = 0; i < images.length; i++) {
-        var img = images[i];
-        var src = img.dataset.src || img.getAttribute('src');
-        console.log('[DEBUG] Image ' + i + ': original src =', src);
-        
-        if (!src) continue;
-        if (src.indexOf('data:') === 0) {
-          if (img.dataset.src && img.dataset.src.indexOf('data:') !== 0) {
-            src = img.dataset.src;
-            console.log('[DEBUG] Image ' + i + ': using data-src =', src);
-          } else {
-            continue;
-          }
-        }
-        if (src.indexOf('/_img_/?url=') !== -1) continue;
-        
-        var absUrl;
-        if (src.indexOf('https://') === 0 || src.indexOf('http://') === 0) {
-          absUrl = src;
-        } else if (src.indexOf('//') === 0) {
-          absUrl = 'https:' + src;
-        } else if (src.indexOf('/') === 0) {
-          absUrl = 'https://mangarw.com' + src;
+      if (!src) continue;
+      if (src.indexOf('data:') === 0) {
+        if (img.dataset.src && img.dataset.src.indexOf('data:') !== 0) {
+          src = img.dataset.src;
+          console.log('[DEBUG] Image ' + i + ': using data-src =', src);
         } else {
-          absUrl = 'https://mangarw.com/' + src;
-        }
-        
-        absUrl = absUrl.replace(/ /g, '%20');
-        var proxyUrl = '/_img_/?url=' + encodeURIComponent(absUrl);
-        console.log('[DEBUG] Image ' + i + ': NEW proxyUrl =', proxyUrl);
-        
-        img.loading = 'eager';
-        img.removeAttribute('loading');
-        img.setAttribute('src', proxyUrl);
-        if (img.dataset.src) {
-          img.dataset.src = proxyUrl;
-        }
-        if (img.style.display === 'none') {
-          img.style.display = '';
-          console.log('[DEBUG] Image ' + i + ': display:none removed');
+          continue;
         }
       }
+      if (src.indexOf('/_img_/') !== -1) continue;
+      if (src.indexOf('data:') === 0) continue;
+      
+      var proxyUrl = '/_img_/?url=' + encodeURIComponent(src);
+      console.log('[DEBUG] Image ' + i + ': proxyUrl =', proxyUrl);
+      
+      img.setAttribute('src', proxyUrl);
+      if (img.dataset.src) {
+        img.dataset.src = proxyUrl;
+      }
+      img.loading = 'eager';
+      img.removeAttribute('loading');
     }
+  }
 
+  fixImages();
+
+  setTimeout(fixImages, 100);
+  setTimeout(fixImages, 300);
+  setTimeout(fixImages, 500);
+  setTimeout(fixImages, 1000);
+  setTimeout(fixImages, 2000);
+  setTimeout(fixImages, 3000);
+  setTimeout(fixImages, 5000);
+
+  document.addEventListener('DOMContentLoaded', function() {
+    console.log('[DEBUG] DOMContentLoaded');
     fixImages();
+  });
 
-    document.addEventListener('DOMContentLoaded', function() {
-      console.log('[DEBUG] DOMContentLoaded - running fixImages');
-      fixImages();
-    });
+  window.addEventListener('load', function() {
+    console.log('[DEBUG] window.load');
+    fixImages();
+  });
 
-    window.addEventListener('load', function() {
-      console.log('[DEBUG] Window load - running fixImages');
-      fixImages();
-    });
+  var observer = new MutationObserver(function() {
+    fixImages();
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
 
-    var delays = [100, 300, 500, 1000, 2000, 3000, 5000, 10000];
-    for (var d = 0; d < delays.length; d++) {
-      (function(delay) {
-        setTimeout(function() {
-          console.log('[DEBUG] Delayed fixImages (' + delay + 'ms)');
-          fixImages();
-        }, delay);
-      })(delays[d]);
+  setInterval(function() {
+    var images = document.querySelectorAll('img');
+    for (var i = 0; i < images.length; i++) {
+      var src = images[i].getAttribute('src');
+      if (src && src.indexOf('https://') === 0 && src.indexOf('/_img_/') === -1) {
+        console.log('[DEBUG] Interval: fixing images');
+        fixImages();
+        break;
+      }
     }
+  }, 2000);
 
-    var observer = new MutationObserver(function() {
-      fixImages();
-    });
-    try {
-      observer.observe(document.body, { childList: true, subtree: true });
-    } catch(e) {
-      console.log('[DEBUG] MutationObserver error:', e);
-    }
-
-    console.log('[DEBUG] Script initialized');
-  })();
+  console.log('[DEBUG] Script initialized');
 </script>
 `;
 
 // ==========================================
-// ⭐ zstd 解凍関数（zstd-codec 使用）
-// ==========================================
-let zstdSimple = null;
-let zstdInitialized = false;
-
-async function initZstd() {
-    if (!zstdInitialized) {
-        try {
-            const { ZstdSimple } = await zstd;
-            zstdSimple = new ZstdSimple();
-            zstdInitialized = true;
-            console.log('[Zstd] Initialized successfully');
-        } catch (e) {
-            console.log('[Zstd] Initialization failed:', e.message);
-        }
-    }
-    return zstdSimple;
-}
-
-function decompressZstdSync(buffer) {
-    // zstd-codec は非同期APIなので、同期的に使うのは難しい
-    // 代わりに、圧縮データをそのまま返す（ブラウザに任せる）
-    console.log(`[Zstd] zstd-codec not used synchronously, passing through`);
-    return buffer;
-}
-
-// ==========================================
-// ⭐ 圧縮展開関数（zstd 対応版）
+// ⭐ 圧縮展開関数
 // ==========================================
 function decompressBuffer(buffer, encoding) {
     if (!encoding || encoding === 'identity') return buffer;
@@ -401,14 +362,10 @@ app.all('*', async (req, res) => {
             return;
         }
 
-        // ==========================================
-        // ⭐ HTML処理（zstd をサーバーで解凍）
-        // ==========================================
         if (contentType.includes("text/html")) {
             const buffer = await response.buffer();
             console.log(`[HTML] Content-Encoding: ${contentEncoding}, Buffer size: ${buffer.length}`);
             
-            // ⭐ zstd をブラウザに任せる（サーバーでは解凍しない）
             if (contentEncoding.includes('zstd')) {
                 console.log(`[HTML] zstd detected, passing through to browser`);
                 res.set(resHeaders);
@@ -445,9 +402,6 @@ app.all('*', async (req, res) => {
             return res.status(response.status).send(text);
         }
 
-        // ==========================================
-        // CSS処理
-        // ==========================================
         if (contentType.includes("css")) {
             const buffer = await response.buffer();
             const decompressed = decompressBuffer(buffer, contentEncoding);
@@ -459,9 +413,6 @@ app.all('*', async (req, res) => {
             return res.status(response.status).send(cssText);
         }
 
-        // ==========================================
-        // JavaScript / JSON 処理
-        // ==========================================
         if (contentType.includes("javascript") || contentType.includes("json")) {
             const buffer = await response.buffer();
             const decompressed = decompressBuffer(buffer, contentEncoding);
@@ -472,9 +423,6 @@ app.all('*', async (req, res) => {
             return res.status(response.status).send(text);
         }
 
-        // ==========================================
-        // その他
-        // ==========================================
         res.set(resHeaders);
         res.status(response.status);
         response.body.pipe(res);
