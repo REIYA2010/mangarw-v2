@@ -193,8 +193,6 @@ app.all('*', async (req, res) => {
     delete h.host; delete h.connection; delete h['content-length']; 
     h['Origin'] = TARGET_BASE;
     h['Referer'] = TARGET_BASE + '/';
-    
-    // ⭐ 圧縮を完全に拒否（identity を指定）
     h['Accept-Encoding'] = 'identity';
 
     console.log(`[Proxy] Direct request to: ${targetUrl}`);
@@ -257,12 +255,22 @@ app.all('*', async (req, res) => {
         }
 
         // ==========================================
-        // ⭐ HTML処理
+        // ⭐ HTML処理（zstd をブラウザに任せる版）
         // ==========================================
         if (contentType.includes("text/html")) {
             const buffer = await response.buffer();
             console.log(`[HTML] Content-Encoding: ${contentEncoding}, Buffer size: ${buffer.length}`);
             
+            // ⭐ zstd の場合は、そのままブラウザに送信（ブラウザが解凍）
+            if (contentEncoding.includes('zstd')) {
+                console.log(`[HTML] zstd detected, passing through to browser (Edge/Chrome will decompress)`);
+                res.set(resHeaders);
+                res.set("Content-Type", "text/html; charset=utf-8");
+                res.set("Content-Encoding", "zstd");
+                return res.status(response.status).send(buffer);
+            }
+            
+            // その他の圧縮形式は従来通り処理
             let text;
             if (contentEncoding && contentEncoding !== 'identity') {
                 const decompressed = decompressBuffer(buffer, contentEncoding);
