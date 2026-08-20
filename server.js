@@ -152,33 +152,43 @@ app.use(express.raw({ type: '*/*', limit: '50mb' }));
 // ==========================================
 // ⭐ サーバー側で画像URLを強制的に書き換える関数
 // ==========================================
-function rewriteImageUrls(html, currentHost) {
-    // ⭐ 画像URLをプロキシ経由に書き換え
-    return html.replace(
-        /(src|data-src)=["'](https?:)?\/\/[^"']+\.(jpg|jpeg|png|gif|webp|bmp|svg)[^"']*["']/gi,
-        function(match, attr, protocol, ext) {
-            // URLを抽出
-            var urlMatch = match.match(/["']([^"']+)["']/);
-            if (!urlMatch) return match;
+function rewriteImageUrls(html) {
+    // ⭐ 画像URLをプロキシ経由に書き換え（より強力な正規表現）
+    var rewritten = false;
+    
+    // data-src と src の両方を処理
+    var result = html.replace(
+        /(data-)?src\s*=\s*["']([^"']+)["']/gi,
+        function(match, prefix, url) {
+            // data:image はスキップ
+            if (url.indexOf('data:') === 0) return match;
+            // すでにプロキシ経由ならスキップ
+            if (url.indexOf('/_img_/') !== -1) return match;
             
-            var originalUrl = urlMatch[1];
-            // プロトコルを補完
-            if (originalUrl.startsWith('//')) {
-                originalUrl = 'https:' + originalUrl;
-            }
-            if (!originalUrl.startsWith('http://') && !originalUrl.startsWith('https://')) {
-                originalUrl = 'https://mangarw.com' + (originalUrl.startsWith('/') ? '' : '/') + originalUrl;
+            // 絶対URLに変換
+            var absUrl = url;
+            if (absUrl.indexOf('//') === 0) {
+                absUrl = 'https:' + absUrl;
+            } else if (absUrl.indexOf('/') === 0) {
+                absUrl = 'https://mangarw.com' + absUrl;
+            } else if (absUrl.indexOf('http://') !== 0 && absUrl.indexOf('https://') !== 0) {
+                absUrl = 'https://mangarw.com/' + absUrl;
             }
             
-            var proxyUrl = '/_img_/?url=' + encodeURIComponent(originalUrl);
-            // 属性名を保持して置換
-            return attr + '="' + proxyUrl + '"';
+            var proxyUrl = '/_img_/?url=' + encodeURIComponent(absUrl);
+            rewritten = true;
+            return (prefix || '') + 'src="' + proxyUrl + '"';
         }
     );
+    
+    if (rewritten) {
+        console.log('[HTML] Image URLs rewritten on server side');
+    }
+    return result;
 }
 
 // ==========================================
-// ⭐ INJECT_CODE（最小限）
+// ⭐ INJECT_CODE（最小限 + フォールバック）
 // ==========================================
 const INJECT_CODE = `
 <style>
@@ -187,16 +197,57 @@ const INJECT_CODE = `
   a[href*="adexchangerapid"], a[href*="university"] { display: none !important; pointer-events: none !important; }
   #load-more-chapters, .load-more, .read-more { display: block !important; visibility: visible !important; opacity: 1 !important; background: #3b82f6 !important; color: white !important; border-radius: 8px; padding: 15px !important; text-align: center; cursor: pointer; }
 </style>
+
+<script>
+  // ⭐ フォールバック: クライアント側でも画像を変換（iPad用）
+  (function() {
+    console.log('[DEBUG] iPad fallback script loaded');
+    
+    function fixImages() {
+      var images = document.querySelectorAll('img');
+      var changed = 0;
+      for (var i = 0; i < images.length; i++) {
+        var img = images[i];
+        var src = img.getAttribute('src');
+        if (src && src.indexOf('https://') === 0 && src.indexOf('/_img_/') === -1) {
+          var proxyUrl = '/_img_/?url=' + encodeURIComponent(src);
+          img.setAttribute('src', proxyUrl);
+          changed++;
+        }
+      }
+      if (changed > 0) {
+        console.log('[DEBUG] iPad fallback: changed ' + changed + ' images');
+      }
+    }
+    
+    // 即時実行
+    fixImages();
+    
+    // 遅延実行
+    setTimeout(fixImages, 500);
+    setTimeout(fixImages, 1000);
+    setTimeout(fixImages, 2000);
+    setTimeout(fixImages, 3000);
+    
+    // DOMContentLoaded
+    document.addEventListener('DOMContentLoaded', fixImages);
+    window.addEventListener('load', fixImages);
+    
+    // 定期的にチェック
+    setInterval(fixImages, 2000);
+  })();
+</script>
 `;
 
 // ==========================================
-// ⭐ 圧縮展開関数
+// ⭐ 圧縮展開関数（iPad対応：zstdを強制的に展開）
 // ==========================================
 function decompressBuffer(buffer, encoding) {
     if (!encoding || encoding === 'identity') return buffer;
     
     if (encoding.includes('zstd')) {
         console.log(`[Decompress] zstd detected, returning raw buffer (${buffer.length} bytes)`);
+        // zstdを展開できないので、そのまま返す（ブラウザに任せる）
         return buffer;
     }
     
@@ -317,12 +368,19 @@ app.all('*', async (req, res) => {
             const buffer = await response.buffer();
             console.log(`[HTML] Content-Encoding: ${contentEncoding}, Buffer size: ${buffer.length}`);
             
+            // ⭐ iPad対応: zstdをそのままブラウザに送信（解凍しない）
             if (contentEncoding.includes('zstd')) {
-                console.log(`[HTML] zstd detected, passing through to browser`);
+                console.log(`[HTML] zstd detected, passing through to browser (iPad may not support it)`);
+                // 解凍せずにそのまま送信
+                let text = buffer.toString('utf-8');
+                // それでもダメなら、強制的に画像書き換えを試みる
+                text = rewriteImageUrls(text);
+                text = text.replace('<head>', '<head>' + INJECT_CODE);
                 res.set(resHeaders);
                 res.set("Content-Type", "text/html; charset=utf-8");
-                res.set("Content-Encoding", "zstd");
-                return res.status(response.status).send(buffer);
+                res.set("Content-Encoding", "identity");
+                res.removeHeader('content-length');
+                return res.status(response.status).send(text);
             }
             
             const decompressed = decompressBuffer(buffer, contentEncoding);
@@ -331,7 +389,7 @@ app.all('*', async (req, res) => {
             console.log(`[HTML] Decompressed size: ${text.length}`);
             console.log(`[HTML] First 200 chars: ${text.substring(0, 200)}`);
             
-            // ⭐ 広告除去
+            // 広告除去
             text = text.replace(/onclick=".*?"/gi, 'data-removed-click=""');
             const badDomains = ['universityshocksooner.com', 'adexchangerapid.com', 'gomuraw.js', 'platform.pubadx.one'];
             badDomains.forEach(d => {
@@ -341,13 +399,12 @@ app.all('*', async (req, res) => {
             });
             text = text.replace(/<a[^>]*adexchangerapid\.com[^>]*>.*?<\/a>/gi, "");
 
-            // ⭐ ホスト名を書き換え
+            // ホスト名を書き換え
             text = text.replace(new RegExp(`https:\/\/[a-z0-9.-]*${TARGET_HOST}`, 'gi'), `https://${currentHost}`);
             text = text.replace(new RegExp(`\/\/${TARGET_HOST}`, 'g'), `//${currentHost}`);
 
-            // ⭐ サーバー側で画像URLを強制的に書き換え（これが重要！）
-            text = rewriteImageUrls(text, currentHost);
-            console.log(`[HTML] Image URLs rewritten`);
+            // ⭐ サーバー側で画像URLを強制的に書き換え
+            text = rewriteImageUrls(text);
 
             // ⭐ インジェクション
             text = text.replace('<head>', '<head>' + INJECT_CODE);
