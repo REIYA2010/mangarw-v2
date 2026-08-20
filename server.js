@@ -158,10 +158,16 @@ const INJECT_CODE = `
 `;
 
 // ==========================================
-// ⭐ 圧縮展開関数
+// ⭐ 圧縮展開関数（zstd対応版）
 // ==========================================
 function decompressBuffer(buffer, encoding) {
     if (!encoding || encoding === 'identity') return buffer;
+    
+    // ⭐ zstd はスキップ（解凍せずにそのまま返す）
+    if (encoding.includes('zstd')) {
+        console.log(`[Decompress] zstd detected, returning raw buffer (${buffer.length} bytes)`);
+        return buffer;
+    }
     
     try {
         if (encoding.includes('gzip')) {
@@ -187,6 +193,7 @@ app.all('*', async (req, res) => {
     delete h.host; delete h.connection; delete h['content-length']; 
     h['Origin'] = TARGET_BASE;
     h['Referer'] = TARGET_BASE + '/';
+    // ⭐ zstd を除外（gzip, deflate, br だけを許可）
     h['Accept-Encoding'] = 'gzip, deflate, br';
 
     try {
@@ -244,7 +251,7 @@ app.all('*', async (req, res) => {
         }
 
         // ==========================================
-        // ⭐ HTML処理（修正版）
+        // ⭐ HTML処理（zstd対応版）
         // ==========================================
         if (contentType.includes("text/html")) {
             const buffer = await response.buffer();
