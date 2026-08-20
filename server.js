@@ -150,7 +150,35 @@ const TARGET_BASE = `https://${TARGET_HOST}`;
 app.use(express.raw({ type: '*/*', limit: '50mb' }));
 
 // ==========================================
-// ⭐ INJECT_CODE（iPad対応版）
+// ⭐ サーバー側で画像URLを強制的に書き換える関数
+// ==========================================
+function rewriteImageUrls(html, currentHost) {
+    // ⭐ 画像URLをプロキシ経由に書き換え
+    return html.replace(
+        /(src|data-src)=["'](https?:)?\/\/[^"']+\.(jpg|jpeg|png|gif|webp|bmp|svg)[^"']*["']/gi,
+        function(match, attr, protocol, ext) {
+            // URLを抽出
+            var urlMatch = match.match(/["']([^"']+)["']/);
+            if (!urlMatch) return match;
+            
+            var originalUrl = urlMatch[1];
+            // プロトコルを補完
+            if (originalUrl.startsWith('//')) {
+                originalUrl = 'https:' + originalUrl;
+            }
+            if (!originalUrl.startsWith('http://') && !originalUrl.startsWith('https://')) {
+                originalUrl = 'https://mangarw.com' + (originalUrl.startsWith('/') ? '' : '/') + originalUrl;
+            }
+            
+            var proxyUrl = '/_img_/?url=' + encodeURIComponent(originalUrl);
+            // 属性名を保持して置換
+            return attr + '="' + proxyUrl + '"';
+        }
+    );
+}
+
+// ==========================================
+// ⭐ INJECT_CODE（最小限）
 // ==========================================
 const INJECT_CODE = `
 <style>
@@ -159,102 +187,6 @@ const INJECT_CODE = `
   a[href*="adexchangerapid"], a[href*="university"] { display: none !important; pointer-events: none !important; }
   #load-more-chapters, .load-more, .read-more { display: block !important; visibility: visible !important; opacity: 1 !important; background: #3b82f6 !important; color: white !important; border-radius: 8px; padding: 15px !important; text-align: center; cursor: pointer; }
 </style>
-
-<script>
-  console.log('[DEBUG] Script loaded');
-
-  function fixImages() {
-    console.log('[DEBUG] fixImages called');
-    var images = document.querySelectorAll('img');
-    console.log('[DEBUG] Found ' + images.length + ' images');
-    
-    var changed = 0;
-    for (var i = 0; i < images.length; i++) {
-      var img = images[i];
-      var src = img.dataset.src || img.getAttribute('src');
-      
-      console.log('[DEBUG] Image ' + i + ': src =', src);
-      
-      if (!src) continue;
-      if (src.indexOf('data:') === 0) {
-        if (img.dataset.src && img.dataset.src.indexOf('data:') !== 0) {
-          src = img.dataset.src;
-          console.log('[DEBUG] Image ' + i + ': using data-src =', src);
-        } else {
-          continue;
-        }
-      }
-      if (src.indexOf('/_img_/') !== -1) continue;
-      
-      var absUrl = src;
-      if (absUrl.indexOf('https://') !== 0 && absUrl.indexOf('http://') !== 0) {
-        if (absUrl.indexOf('//') === 0) {
-          absUrl = 'https:' + absUrl;
-        } else if (absUrl.indexOf('/') === 0) {
-          absUrl = 'https://mangarw.com' + absUrl;
-        } else {
-          absUrl = 'https://mangarw.com/' + absUrl;
-        }
-      }
-      
-      var proxyUrl = '/_img_/?url=' + encodeURIComponent(absUrl);
-      console.log('[DEBUG] Image ' + i + ': proxyUrl =', proxyUrl);
-      
-      img.setAttribute('src', proxyUrl);
-      if (img.dataset.src) {
-        img.dataset.src = proxyUrl;
-      }
-      img.loading = 'eager';
-      img.removeAttribute('loading');
-      changed++;
-    }
-    console.log('[DEBUG] Changed ' + changed + ' images');
-  }
-
-  var delays = [0, 100, 300, 500, 1000, 2000, 3000, 5000, 10000, 15000, 20000];
-  for (var d = 0; d < delays.length; d++) {
-    (function(delay) {
-      setTimeout(function() {
-        console.log('[DEBUG] Delayed fixImages (' + delay + 'ms)');
-        fixImages();
-      }, delay);
-    })(delays[d]);
-  }
-
-  document.addEventListener('DOMContentLoaded', function() {
-    console.log('[DEBUG] DOMContentLoaded');
-    fixImages();
-  });
-
-  window.addEventListener('load', function() {
-    console.log('[DEBUG] window.load');
-    fixImages();
-  });
-
-  var observer = new MutationObserver(function() {
-    console.log('[DEBUG] MutationObserver triggered');
-    fixImages();
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
-
-  setInterval(function() {
-    var images = document.querySelectorAll('img');
-    var needsFix = false;
-    for (var i = 0; i < images.length; i++) {
-      var src = images[i].getAttribute('src');
-      if (src && src.indexOf('https://') === 0 && src.indexOf('/_img_/') === -1) {
-        needsFix = true;
-        break;
-      }
-    }
-    if (needsFix) {
-      console.log('[DEBUG] Interval: fixing images');
-      fixImages();
-    }
-  }, 2000);
-
-  console.log('[DEBUG] Script initialized');
-</script>
 `;
 
 // ==========================================
@@ -399,6 +331,7 @@ app.all('*', async (req, res) => {
             console.log(`[HTML] Decompressed size: ${text.length}`);
             console.log(`[HTML] First 200 chars: ${text.substring(0, 200)}`);
             
+            // ⭐ 広告除去
             text = text.replace(/onclick=".*?"/gi, 'data-removed-click=""');
             const badDomains = ['universityshocksooner.com', 'adexchangerapid.com', 'gomuraw.js', 'platform.pubadx.one'];
             badDomains.forEach(d => {
@@ -408,9 +341,15 @@ app.all('*', async (req, res) => {
             });
             text = text.replace(/<a[^>]*adexchangerapid\.com[^>]*>.*?<\/a>/gi, "");
 
+            // ⭐ ホスト名を書き換え
             text = text.replace(new RegExp(`https:\/\/[a-z0-9.-]*${TARGET_HOST}`, 'gi'), `https://${currentHost}`);
             text = text.replace(new RegExp(`\/\/${TARGET_HOST}`, 'g'), `//${currentHost}`);
 
+            // ⭐ サーバー側で画像URLを強制的に書き換え（これが重要！）
+            text = rewriteImageUrls(text, currentHost);
+            console.log(`[HTML] Image URLs rewritten`);
+
+            // ⭐ インジェクション
             text = text.replace('<head>', '<head>' + INJECT_CODE);
             
             res.set(resHeaders);
