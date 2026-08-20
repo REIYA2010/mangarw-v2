@@ -185,8 +185,8 @@ function decompressBuffer(buffer, encoding) {
 app.all('*', async (req, res) => {
     if (req.url === '/favicon.ico') return res.status(204).end();
 
-    // ⭐ CORSプロキシ経由で取得（Cloudflareの圧縮をバイパス）
-    const targetUrl = `https://corsproxy.io/?url=${encodeURIComponent(TARGET_BASE + req.url)}`;
+    // ⭐ cors-anywhere 経由で取得
+    const targetUrl = `https://cors-anywhere.herokuapp.com/${TARGET_BASE + req.url}`;
     const currentHost = req.get('host');
 
     const h = { ...req.headers };
@@ -203,7 +203,7 @@ app.all('*', async (req, res) => {
             redirect: 'manual',
             body: (req.method !== 'GET' && req.method !== 'HEAD') ? req.body : undefined,
             timeout: 30000,
-            compress: false // ⭐ 圧縮を完全に無効化
+            compress: false
         });
 
         let resHeaders = {};
@@ -257,7 +257,6 @@ app.all('*', async (req, res) => {
             const buffer = await response.buffer();
             console.log(`[HTML] Content-Encoding: ${contentEncoding}, Buffer size: ${buffer.length}`);
             
-            // 圧縮を展開または直接文字列化
             let text;
             if (contentEncoding && contentEncoding !== 'identity') {
                 const decompressed = decompressBuffer(buffer, contentEncoding);
@@ -342,5 +341,5 @@ app.all('*', async (req, res) => {
     }
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PROCESS_PORT || 8080;
 app.listen(PORT, () => console.log(`Super Compressed Manga Engine Online on port ${PORT}`));
