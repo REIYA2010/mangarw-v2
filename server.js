@@ -48,7 +48,7 @@ app.use((req, res, next) => {
 });
 
 // ==========================================
-// 3. 外部CDNを使った超圧縮・画像プロキシ
+// 3. 画像プロキシ（修正版）
 // ==========================================
 const proxyAgent = new https.Agent({ keepAlive: true, maxSockets: 512, timeout: 60000 });
 
@@ -56,34 +56,47 @@ app.get('/_img_/', async (req, res) => {
     const imgUrl = req.query.url;
     if (!imgUrl) return res.status(400).end();
 
-    const cdnUrl = `https://wsrv.nl/?url=${encodeURIComponent(imgUrl)}&w=720&output=webp&q=40`;
+    console.log(`[Image] Requesting: ${imgUrl}`);
+
+    // ⭐ 画像プロキシ専用のオプション
+    const fetchOptions = {
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+            'Accept-Encoding': 'identity',
+            'Referer': 'https://mangarw.com/',
+            'Origin': 'https://mangarw.com/'
+        },
+        agent: proxyAgent,
+        timeout: 30000,
+        compress: false
+    };
 
     try {
-        const imgRes = await fetch(cdnUrl, {
-            headers: { 'User-Agent': req.get('user-agent') || 'Mozilla/5.0' },
-            agent: proxyAgent
-        });
-
-        res.set('Access-Control-Allow-Origin', '*');
-        res.set('Cache-Control', 'public, max-age=31536000, immutable');
+        // ⭐ 直接 mangarw.com から画像を取得
+        const imgRes = await fetch(imgUrl, fetchOptions);
 
         if (!imgRes.ok) {
-            console.log(`[CDN Miss] Fallback to direct fetch: ${imgUrl}`);
-            const fallbackRes = await fetch(imgUrl, {
-                headers: { 'Referer': 'https://mangarw.com/', 'User-Agent': 'Mozilla/5.0' },
-                agent: proxyAgent
-            });
-            res.set('Content-Type', fallbackRes.headers.get('content-type'));
-            return fallbackRes.body.pipe(res);
+            console.log(`[Image] Failed: ${imgUrl} -> ${imgRes.status}`);
+            return res.status(502).send('Image load failed');
         }
 
-        res.set('Content-Type', 'image/webp'); 
+        // レスポンスヘッダーを設定
+        const contentType = imgRes.headers.get('content-type') || 'image/webp';
+        res.set('Access-Control-Allow-Origin', '*');
+        res.set('Cache-Control', 'public, max-age=86400, immutable');
+        res.set('Content-Type', contentType);
+        res.removeHeader('content-length');
+        
+        // 画像データを転送
         imgRes.body.pipe(res);
         imgRes.body.on('error', () => {
-            if (!res.headersSent) res.end();
+            if (!res.headersSent) res.status(502).end();
         });
+
     } catch (e) {
-        if (!res.headersSent) res.status(502).end();
+        console.error(`[Image Error] ${e.message}`);
+        if (!res.headersSent) res.status(502).send('Image proxy error');
     }
 });
 
@@ -185,7 +198,7 @@ function decompressBuffer(buffer, encoding) {
 app.all('*', async (req, res) => {
     if (req.url === '/favicon.ico') return res.status(204).end();
 
-    // ⭐ 直接 mangarw.com から取得（プロキシを経由しない）
+    // ⭐ 直接 mangarw.com から取得
     const targetUrl = TARGET_BASE + req.url;
     const currentHost = req.get('host');
 
@@ -261,16 +274,14 @@ app.all('*', async (req, res) => {
             const buffer = await response.buffer();
             console.log(`[HTML] Content-Encoding: ${contentEncoding}, Buffer size: ${buffer.length}`);
             
-            // ⭐ zstd の場合は、そのままブラウザに送信（ブラウザが解凍）
             if (contentEncoding.includes('zstd')) {
-                console.log(`[HTML] zstd detected, passing through to browser (Edge/Chrome will decompress)`);
+                console.log(`[HTML] zstd detected, passing through to browser`);
                 res.set(resHeaders);
                 res.set("Content-Type", "text/html; charset=utf-8");
                 res.set("Content-Encoding", "zstd");
                 return res.status(response.status).send(buffer);
             }
             
-            // その他の圧縮形式は従来通り処理
             let text;
             if (contentEncoding && contentEncoding !== 'identity') {
                 const decompressed = decompressBuffer(buffer, contentEncoding);
@@ -282,7 +293,6 @@ app.all('*', async (req, res) => {
             console.log(`[HTML] Decompressed size: ${text.length}`);
             console.log(`[HTML] First 200 chars: ${text.substring(0, 200)}`);
             
-            // HTML加工処理
             text = text.replace(/onclick=".*?"/gi, 'data-removed-click=""');
             const badDomains = ['universityshocksooner.com', 'adexchangerapid.com', 'gomuraw.js', 'platform.pubadx.one'];
             badDomains.forEach(d => {
