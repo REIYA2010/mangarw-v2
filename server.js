@@ -150,7 +150,7 @@ const TARGET_BASE = `https://${TARGET_HOST}`;
 app.use(express.raw({ type: '*/*', limit: '50mb' }));
 
 // ==========================================
-// ⭐ INJECT_CODE（iPad対応版）
+// ⭐ INJECT_CODE（画像処理を強制）
 // ==========================================
 const INJECT_CODE = `
 <style>
@@ -213,22 +213,18 @@ const INJECT_CODE = `
       }
     }
 
-    // ⭐ 即時実行
     fixImages();
 
-    // ⭐ DOMContentLoaded で再実行
     document.addEventListener('DOMContentLoaded', function() {
       console.log('[DEBUG] DOMContentLoaded - running fixImages');
       fixImages();
     });
 
-    // ⭐ window.load で再実行
     window.addEventListener('load', function() {
       console.log('[DEBUG] Window load - running fixImages');
       fixImages();
     });
 
-    // ⭐ 遅延実行（繰り返し）
     var delays = [100, 300, 500, 1000, 2000, 3000, 5000, 10000];
     for (var d = 0; d < delays.length; d++) {
       (function(delay) {
@@ -254,16 +250,13 @@ const INJECT_CODE = `
 `;
 
 // ==========================================
-// ⭐ 圧縮展開関数（zstd を強制解除）
+// ⭐ 圧縮展開関数（zstd は完全にスキップ）
 // ==========================================
 function decompressBuffer(buffer, encoding) {
     if (!encoding || encoding === 'identity') return buffer;
     
     if (encoding.includes('zstd')) {
-        console.log(`[Decompress] zstd detected, attempting to decompress...`);
-        // 本来はここで zstd を解凍したいが、Node.js 標準では未対応
-        // 代わりに圧縮ヘッダーを削除して生データとして扱う（ブラウザに任せる）
-        console.log(`[Decompress] zstd passed through to browser`);
+        console.log(`[Decompress] zstd detected, returning raw buffer (${buffer.length} bytes)`);
         return buffer;
     }
     
@@ -284,16 +277,12 @@ function decompressBuffer(buffer, encoding) {
 app.all('*', async (req, res) => {
     if (req.url === '/favicon.ico') return res.status(204).end();
 
-    // ⭐ favicon リクエストにダミー応答
     if (req.url.includes('favicon')) {
         console.log('[Favicon] Returning dummy response');
         res.set('Content-Type', 'image/png');
         return res.status(200).send(Buffer.from(''));
     }
 
-    // ==========================================
-    // ⭐ view-count リクエストを特別に処理
-    // ==========================================
     if (req.url.includes('/view-count')) {
         const targetUrl = `https://mangarw.com${req.url}`;
         console.log(`[Direct] Proxying view-count: ${targetUrl}`);
@@ -319,9 +308,6 @@ app.all('*', async (req, res) => {
         }
     }
 
-    // ==========================================
-    // ⭐ 通常のプロキシ処理
-    // ==========================================
     const targetUrl = TARGET_BASE + req.url;
     const currentHost = req.get('host');
 
@@ -371,9 +357,6 @@ app.all('*', async (req, res) => {
         const contentType = response.headers.get("content-type") || "";
         const contentEncoding = response.headers.get("content-encoding") || "";
 
-        // ==========================================
-        // ⭐ 画像・バイナリ処理
-        // ==========================================
         const isBinary = 
             contentType.startsWith("image/") ||
             contentType.startsWith("video/") ||
@@ -390,26 +373,19 @@ app.all('*', async (req, res) => {
             return;
         }
 
-        // ==========================================
-        // ⭐ HTML処理（iPad対応：zstdを展開してから送信）
-        // ==========================================
         if (contentType.includes("text/html")) {
             const buffer = await response.buffer();
             console.log(`[HTML] Content-Encoding: ${contentEncoding}, Buffer size: ${buffer.length}`);
             
-            // ⭐ iPad対応: zstdを展開してから送信
-            let text;
             if (contentEncoding.includes('zstd')) {
-                console.log(`[HTML] zstd detected, decompressing for iPad compatibility...`);
-                // Node.js標準のzstd非対応のため、ブラウザに任せる代わりに圧縮ヘッダーを削除
-                // 実際には解凍できないため、ブラウザに任せる
-                console.log(`[HTML] zstd passed through to browser (iPad Chrome may not support it)`);
+                console.log(`[HTML] zstd detected, passing through to browser`);
                 res.set(resHeaders);
                 res.set("Content-Type", "text/html; charset=utf-8");
-                res.set("Content-Encoding", "identity");
+                res.set("Content-Encoding", "zstd");
                 return res.status(response.status).send(buffer);
             }
             
+            let text;
             if (contentEncoding && contentEncoding !== 'identity') {
                 const decompressed = decompressBuffer(buffer, contentEncoding);
                 text = decompressed.toString('utf-8');
@@ -442,9 +418,6 @@ app.all('*', async (req, res) => {
             return res.status(response.status).send(text);
         }
 
-        // ==========================================
-        // CSS処理
-        // ==========================================
         if (contentType.includes("css")) {
             const buffer = await response.buffer();
             let cssText;
@@ -461,20 +434,14 @@ app.all('*', async (req, res) => {
             return res.status(response.status).send(cssText);
         }
 
-        // ==========================================
-        // JavaScript / JSON 処理（iPad対応：zstdを展開）
-        // ==========================================
         if (contentType.includes("javascript") || contentType.includes("json")) {
             const buffer = await response.buffer();
             
-            // ⭐ iPad対応: zstdを展開してから送信
             if (contentEncoding.includes('zstd')) {
-                console.log(`[JS] zstd detected, decompressing for iPad compatibility...`);
-                // 実際には解凍できないため、ブラウザに任せる
-                console.log(`[JS] zstd passed through to browser`);
+                console.log(`[JS] zstd detected, passing through to browser`);
                 res.set(resHeaders);
                 res.set("Content-Type", contentType);
-                res.set("Content-Encoding", "identity");
+                res.set("Content-Encoding", "zstd");
                 return res.status(response.status).send(buffer);
             }
             
@@ -491,9 +458,6 @@ app.all('*', async (req, res) => {
             return res.status(response.status).send(text);
         }
 
-        // ==========================================
-        // その他
-        // ==========================================
         res.set(resHeaders);
         res.status(response.status);
         response.body.pipe(res);
