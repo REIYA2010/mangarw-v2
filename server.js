@@ -185,8 +185,8 @@ function decompressBuffer(buffer, encoding) {
 app.all('*', async (req, res) => {
     if (req.url === '/favicon.ico') return res.status(204).end();
 
-    // ⭐ cors-anywhere 経由で取得
-    const targetUrl = `https://cors-anywhere.herokuapp.com/${TARGET_BASE + req.url}`;
+    // ⭐ 正しいURL生成（/ の位置に注意）
+    const targetUrl = `https://cors-anywhere.herokuapp.com/${TARGET_HOST}${req.url}`;
     const currentHost = req.get('host');
 
     const h = { ...req.headers };
@@ -341,5 +341,5 @@ app.all('*', async (req, res) => {
     }
 });
 
-const PORT = process.env.PROCESS_PORT || 8080;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Super Compressed Manga Engine Online on port ${PORT}`));
