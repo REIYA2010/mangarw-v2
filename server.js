@@ -202,13 +202,14 @@ app.all('*', async (req, res) => {
             method: req.method,
             headers: h,
             agent: proxyAgent,
-            redirect: 'manual',
+            redirect: 'follow', // ⭐ manual → follow に変更（リダイレクトを自動追跡）
             body: (req.method !== 'GET' && req.method !== 'HEAD') ? req.body : undefined,
             timeout: 30000,
             compress: false
         });
 
         console.log(`[Proxy] Response status: ${response.status}`);
+        console.log(`[Proxy] Final URL: ${response.url}`); // デバッグ用
 
         let resHeaders = {};
         response.headers.forEach((v, k) => {
